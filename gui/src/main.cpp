@@ -1,4 +1,7 @@
 
+// CI TEST: deliberate syntax error to verify CI catches build failures
+#error "CI_FAILURE_TEST"
+
 // Use the native entry point instead of SDL's WinMain wrapper.
 #ifdef CHIAKI_GUI_ENABLE_SDL_GAMECONTROLLER
 #ifndef SDL_MAIN_HANDLED
