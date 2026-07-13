@@ -21,9 +21,10 @@ jobs:
 
       - name: Configure
         run: |
-          docker run --rm -v ${{ github.workspace }}:/workspace -w /workspace \
+          mkdir -p build
+          docker run --rm -u root -v ${{ github.workspace }}:/workspace -w /workspace \
             chiaki-devcontainer bash -c "
-              mkdir -p build && cd build && \
+              cd build && \
               cmake .. -G Ninja -DCMAKE_BUILD_TYPE=Release \
                 -DCHIAKI_ENABLE_TESTS=OFF \
                 -DCHIAKI_ENABLE_CLI=ON \
@@ -32,12 +33,12 @@ jobs:
 
       - name: Build
         run: |
-          docker run --rm -v ${{ github.workspace }}:/workspace -w /workspace \
+          docker run --rm -u root -v ${{ github.workspace }}:/workspace -w /workspace \
             chiaki-devcontainer bash -c "cd build && ninja -j\$(nproc)"
 
       - name: Verify binaries
         run: |
-          docker run --rm -v ${{ github.workspace }}:/workspace -w /workspace \
+          docker run --rm -u root -v ${{ github.workspace }}:/workspace -w /workspace \
             chiaki-devcontainer bash -c "
               file build/gui/chiaki build/cli/chiaki-cli && \
               echo '✅ Build OK'
