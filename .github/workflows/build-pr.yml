@@ -3,8 +3,7 @@ name: Build chiaki-ng PR (Linux)
 on:
   pull_request:
     types: [opened, synchronize, reopened]
-  push:
-    branches: [feat/*]
+  workflow_dispatch:
 
 jobs:
   build-linux:
