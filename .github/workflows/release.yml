@@ -1,0 +1,75 @@
+name: Build and Release
+
+on:
+  push:
+    branches: [main, develop]
+
+jobs:
+  build-and-release:
+    name: Build Linux + Release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Set release metadata
+        id: meta
+        run: |
+          BRANCH="${GITHUB_REF_NAME}"
+          DATE="$(date +%Y%m%d-%H%M%S)"
+          SHORT_SHA="${GITHUB_SHA::7}"
+          if [ "$BRANCH" = "main" ]; then
+            TAG="v${DATE}-${SHORT_SHA}"
+            PRERELEASE="false"
+            TITLE="Build ${TAG}"
+          else
+            TAG="develop-${DATE}-${SHORT_SHA}"
+            PRERELEASE="true"
+            TITLE="[DEVELOP] Build ${TAG}"
+          fi
+          echo "tag=${TAG}" >> $GITHUB_OUTPUT
+          echo "prerelease=${PRERELEASE}" >> $GITHUB_OUTPUT
+          echo "title=${TITLE}" >> $GITHUB_OUTPUT
+          echo "branch=${BRANCH}" >> $GITHUB_OUTPUT
+
+      - name: Build devcontainer image
+        run: |
+          docker build -t chiaki-devcontainer -f .devcontainer/Dockerfile .devcontainer/
+
+      - name: Configure
+        run: |
+          mkdir -p build
+          docker run --rm -u root -v ${{ github.workspace }}:/workspace -w /workspace \
+            chiaki-devcontainer bash -c "
+              cd build && \
+              cmake .. -G Ninja -DCMAKE_BUILD_TYPE=Release \
+                -DCHIAKI_ENABLE_TESTS=OFF \
+                -DCHIAKI_ENABLE_CLI=ON \
+                -DCHIAKI_ENABLE_GUI=ON
+            "
+
+      - name: Build
+        run: |
+          docker run --rm -u root -v ${{ github.workspace }}:/workspace -w /workspace \
+            chiaki-devcontainer bash -c "cd build && ninja -j\$(nproc)"
+
+      - name: Package binaries
+        run: |
+          mkdir -p release
+          cp build/gui/chiaki release/
+          cp build/cli/chiaki-cli release/
+          cd release && tar czf ../chiaki-ng-linux-${{ steps.meta.outputs.tag }}.tar.gz .
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.meta.outputs.tag }}
+          name: ${{ steps.meta.outputs.title }}
+          prerelease: ${{ steps.meta.outputs.prerelease }}
+          files: chiaki-ng-linux-${{ steps.meta.outputs.tag }}.tar.gz
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
