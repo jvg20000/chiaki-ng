@@ -1,0 +1,44 @@
+name: Build chiaki-ng PR (Linux)
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  push:
+    branches: [feat/*]
+
+jobs:
+  build-linux:
+    name: Build Linux (devcontainer)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Build devcontainer image
+        run: |
+          docker build -t chiaki-devcontainer -f .devcontainer/Dockerfile .devcontainer/
+
+      - name: Configure
+        run: |
+          docker run --rm -v ${{ github.workspace }}:/workspace -w /workspace \
+            chiaki-devcontainer bash -c "
+              mkdir -p build && cd build && \
+              cmake .. -G Ninja -DCMAKE_BUILD_TYPE=Release \
+                -DCHIAKI_ENABLE_TESTS=OFF \
+                -DCHIAKI_ENABLE_CLI=ON \
+                -DCHIAKI_ENABLE_GUI=ON
+            "
+
+      - name: Build
+        run: |
+          docker run --rm -v ${{ github.workspace }}:/workspace -w /workspace \
+            chiaki-devcontainer bash -c "cd build && ninja -j\$(nproc)"
+
+      - name: Verify binaries
+        run: |
+          docker run --rm -v ${{ github.workspace }}:/workspace -w /workspace \
+            chiaki-devcontainer bash -c "
+              file build/gui/chiaki build/cli/chiaki-cli && \
+              echo '✅ Build OK'
+            "
