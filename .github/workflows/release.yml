@@ -13,6 +13,8 @@ jobs:
       contents: write
     outputs:
       tag: ${{ steps.meta.outputs.tag }}
+      version: ${{ steps.meta.outputs.version }}
+      short_sha: ${{ steps.meta.outputs.short_sha }}
       upload_url: ${{ steps.release.outputs.upload_url }}
     steps:
       - uses: actions/checkout@v4
@@ -20,19 +22,24 @@ jobs:
       - name: Set release metadata
         id: meta
         run: |
+          VERSION_MAJOR="$(grep 'CHIAKI_VERSION_MAJOR' CMakeLists.txt | grep -Eo '[0-9]+' | head -1)"
+          VERSION_MINOR="$(grep 'CHIAKI_VERSION_MINOR' CMakeLists.txt | grep -Eo '[0-9]+' | head -1)"
+          VERSION_PATCH="$(grep 'CHIAKI_VERSION_PATCH' CMakeLists.txt | grep -Eo '[0-9]+' | head -1)"
+          VERSION="${VERSION_MAJOR}.${VERSION_MINOR}.${VERSION_PATCH}"
           BRANCH="${GITHUB_REF_NAME}"
-          DATE="$(date +%Y%m%d-%H%M%S)"
           SHORT_SHA="${GITHUB_SHA::7}"
           if [ "$BRANCH" = "main" ]; then
-            TAG="v${DATE}-${SHORT_SHA}"
+            TAG="v${VERSION}-${SHORT_SHA}"
             PRERELEASE="false"
-            TITLE="Build ${TAG}"
+            TITLE="Build v${VERSION} (${SHORT_SHA})"
           else
-            TAG="develop-${DATE}-${SHORT_SHA}"
+            TAG="v${VERSION}-dev-${SHORT_SHA}"
             PRERELEASE="true"
-            TITLE="[DEVELOP] Build ${TAG}"
+            TITLE="[DEVELOP] Build v${VERSION} (${SHORT_SHA})"
           fi
           echo "tag=${TAG}" >> $GITHUB_OUTPUT
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          echo "short_sha=${SHORT_SHA}" >> $GITHUB_OUTPUT
           echo "prerelease=${PRERELEASE}" >> $GITHUB_OUTPUT
           echo "title=${TITLE}" >> $GITHUB_OUTPUT
 
@@ -65,7 +72,9 @@ jobs:
       - name: Configure & Build
         run: |
           mkdir -p build
-          docker run --rm -u root -v ${{ github.workspace }}:/workspace -w /workspace \
+          docker run --rm -u root \
+            -v ${{ github.workspace }}:/workspace \
+            -w /workspace \
             chiaki-devcontainer bash -c "
               cd build && \
               cmake .. -G Ninja -DCMAKE_BUILD_TYPE=Release \
@@ -77,15 +86,19 @@ jobs:
 
       - name: Package
         run: |
+          V="${{ needs.create-release.outputs.version }}"
+          S="${{ needs.create-release.outputs.short_sha }}"
+          ARTIFACT="chiaki-ng-linux-x64-v${V}-${S}.tar.gz"
           mkdir -p dist
           cp build/gui/chiaki build/cli/chiaki-cli dist/
-          cd dist && tar czf ../chiaki-ng-linux-x64.tar.gz .
+          cd dist && tar czf ../"${ARTIFACT}" .
+          echo "artifact_name=${ARTIFACT}" >> $GITHUB_ENV
 
       - name: Upload to Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.create-release.outputs.tag }}
-          files: chiaki-ng-linux-x64.tar.gz
+          files: ${{ env.artifact_name }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -184,13 +197,17 @@ jobs:
       - name: Package
         shell: pwsh
         run: |
-          Compress-Archive -Path chiaki-ng-Win -DestinationPath chiaki-ng-windows-x64.zip
+          $ver = "${{ needs.create-release.outputs.version }}"
+          $sha = "${{ needs.create-release.outputs.short_sha }}"
+          $artifact = "chiaki-ng-win-x64-v${ver}-${sha}.zip"
+          Compress-Archive -Path chiaki-ng-Win -DestinationPath $artifact
+          echo "artifact_name=$artifact" >> $env:GITHUB_ENV
 
       - name: Upload to Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.create-release.outputs.tag }}
-          files: chiaki-ng-windows-x64.zip
+          files: ${{ env.artifact_name }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -240,19 +257,21 @@ jobs:
           cp MoltenVK/MoltenVK/dylib/macOS/* chiaki-ng.app/Contents/Resources/vulkan/icd.d
           $(brew --prefix)/opt/qt@6/bin/macdeployqt chiaki-ng.app \
             -qmldir="$PWD/gui/src/qml" -libpath=$(brew --prefix)/lib
-          # SDL libs
           cp /usr/local/lib/libSDL3.dylib chiaki-ng.app/Contents/MacOS/libSDL3.dylib 2>/dev/null || true
           cp /usr/local/lib/libSDL2-2.0.0.dylib chiaki-ng.app/Contents/MacOS/libSDL2-2.0.0.dylib 2>/dev/null || true
-          # MoltenVK symlink
           ln -sf libvulkan.1.dylib chiaki-ng.app/Contents/Frameworks/vulkan 2>/dev/null || true
           codesign --force --entitlements gui/entitlements.xml --deep --sign - chiaki-ng.app
-          hdiutil create -srcfolder chiaki-ng.app chiaki-ng-macos-arm64.dmg
+          V="${{ needs.create-release.outputs.version }}"
+          S="${{ needs.create-release.outputs.short_sha }}"
+          ARTIFACT="chiaki-ng-macos-arm64-v${V}-${S}.dmg"
+          hdiutil create -srcfolder chiaki-ng.app "${ARTIFACT}"
+          echo "artifact_name=${ARTIFACT}" >> $GITHUB_ENV
 
       - name: Upload to Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.create-release.outputs.tag }}
-          files: chiaki-ng-macos-arm64.dmg
+          files: ${{ env.artifact_name }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -305,12 +324,112 @@ jobs:
           cp /usr/local/lib/libSDL2-2.0.0.dylib chiaki-ng.app/Contents/MacOS/libSDL2-2.0.0.dylib 2>/dev/null || true
           ln -sf libvulkan.1.dylib chiaki-ng.app/Contents/Frameworks/vulkan 2>/dev/null || true
           codesign --force --entitlements gui/entitlements.xml --deep --sign - chiaki-ng.app
-          hdiutil create -srcfolder chiaki-ng.app chiaki-ng-macos-x64.dmg
+          V="${{ needs.create-release.outputs.version }}"
+          S="${{ needs.create-release.outputs.short_sha }}"
+          ARTIFACT="chiaki-ng-macos-x64-v${V}-${S}.dmg"
+          hdiutil create -srcfolder chiaki-ng.app "${ARTIFACT}"
+          echo "artifact_name=${ARTIFACT}" >> $GITHUB_ENV
 
       - name: Upload to Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.create-release.outputs.tag }}
-          files: chiaki-ng-macos-x64.dmg
+          files: ${{ env.artifact_name }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ── AppImage x64 (Podman) ──────────────────────────────────────────
+  build-appimage-x64:
+    name: AppImage x64
+    needs: create-release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Setup Podman
+        run: |
+          sudo apt update
+          sudo apt-get -y install podman
+
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          path: chiaki-ng
+
+      - name: Add QmlWebEngine Import
+        working-directory: chiaki-ng
+        run: cp scripts/qtwebengine_import.qml gui/src/qml/
+
+      - name: Build AppImage
+        working-directory: chiaki-ng
+        run: |
+          set -xe
+          podman run --rm \
+            -v "`pwd`:/build/chiaki" \
+            -w "/build/chiaki" \
+            --device /dev/fuse \
+            --cap-add SYS_ADMIN \
+            -t docker.io/streetpea/chiaki-ng-builder:qt6.9 \
+            /bin/bash -c "sudo -E scripts/build-appimage.sh /build/appdir"
+          V="${{ needs.create-release.outputs.version }}"
+          S="${{ needs.create-release.outputs.short_sha }}"
+          ARTIFACT="chiaki-ng-appimage-x64-v${V}-${S}.AppImage"
+          cp appimage/chiaki-ng.AppImage "${ARTIFACT}"
+          echo "artifact_name=${ARTIFACT}" >> $GITHUB_ENV
+
+      - name: Upload to Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.create-release.outputs.tag }}
+          files: chiaki-ng/${{ env.artifact_name }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ── AppImage ARM64 (Podman) ────────────────────────────────────────
+  build-appimage-arm64:
+    name: AppImage ARM64
+    needs: create-release
+    runs-on: ubuntu-24.04-arm
+    permissions:
+      contents: write
+    steps:
+      - name: Setup Podman
+        run: |
+          sudo apt update
+          sudo apt-get -y install podman
+
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          path: chiaki-ng
+
+      - name: Add QmlWebEngine Import
+        working-directory: chiaki-ng
+        run: cp scripts/qtwebengine_import.qml gui/src/qml/
+
+      - name: Build AppImage
+        working-directory: chiaki-ng
+        run: |
+          set -xe
+          podman run --rm \
+            -v "`pwd`:/build/chiaki" \
+            -w "/build/chiaki" \
+            --device /dev/fuse \
+            --cap-add SYS_ADMIN \
+            -t docker.io/streetpea/chiaki-ng-builder:qt6.7 \
+            /bin/bash -c "sudo -E scripts/build-appimage.sh /build/appdir"
+          V="${{ needs.create-release.outputs.version }}"
+          S="${{ needs.create-release.outputs.short_sha }}"
+          ARTIFACT="chiaki-ng-appimage-arm64-v${V}-${S}.AppImage"
+          cp appimage/chiaki-ng.AppImage "${ARTIFACT}"
+          echo "artifact_name=${ARTIFACT}" >> $GITHUB_ENV
+
+      - name: Upload to Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.create-release.outputs.tag }}
+          files: chiaki-ng/${{ env.artifact_name }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
