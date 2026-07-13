@@ -1,0 +1,31 @@
+{
+    "name": "chiaki-ng",
+    "dockerFile": "Dockerfile",
+    "remoteUser": "developer",
+
+    "customizations": {
+        "vscode": {
+            "extensions": [
+                "ms-vscode.cpptools",
+                "ms-vscode.cmake-tools",
+                "twxs.cmake"
+            ],
+            "settings": {
+                "cmake.configureOnOpen": false,
+                "cmake.buildDirectory": "${workspaceFolder}/build",
+                "cmake.generator": "Ninja",
+                "cmake.configureArgs": [
+                    "-DCMAKE_BUILD_TYPE=Debug",
+                    "-DCHIAKI_ENABLE_TESTS=ON",
+                    "-DCHIAKI_ENABLE_CLI=ON",
+                    "-DCHIAKI_ENABLE_GUI=ON",
+                    "-DCHIAKI_ENABLE_STEAMDECK_NATIVE=OFF"
+                ]
+            }
+        }
+    },
+
+    "remoteEnv": {
+        "CMAKE_BUILD_PARALLEL_LEVEL": "4"
+    }
+}
