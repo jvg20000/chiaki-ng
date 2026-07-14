@@ -701,6 +701,7 @@ StreamSession::StreamSession(const StreamSessionConnectInfo &connect_info, QObje
 	{
 		mcp_server = new McpServer(connect_info.settings, this);
 		mcp_server->SetChiakiSession(&session);
+		mcp_server->SetFfmpegDecoder(ffmpeg_decoder);
 		mcp_server->StartServer(
 			static_cast<quint16>(connect_info.settings->GetMcpPort()),
 			connect_info.settings->GetMcpExpose(),
@@ -2886,6 +2887,7 @@ void StreamSession::HandleMcpSettingsChanged()
 		{
 			mcp_server = new McpServer(s, this);
 			mcp_server->SetChiakiSession(&session);
+			mcp_server->SetFfmpegDecoder(ffmpeg_decoder);
 			mcp_server->StartServer(
 				static_cast<quint16>(port), expose, token);
 		}
