@@ -5,6 +5,10 @@
 
 #include <QObject>
 #include <QWebSocketServer>
+#include <QImage>
+#include <chiaki/ffmpegdecoder.h>
+#include <QImage>
+#include <chiaki/ffmpegdecoder.h>
 #include <QWebSocket>
 #include <QJsonObject>
 #include <QJsonDocument>
@@ -28,6 +32,10 @@ enum class McpState
 	Streaming
 };
 
+typedef struct chiaki_ffmpeg_decoder_t ChiakiFfmpegDecoder;
+
+typedef struct chiaki_ffmpeg_decoder_t ChiakiFfmpegDecoder;
+
 class McpServer : public QObject
 {
 	Q_OBJECT
@@ -36,6 +44,8 @@ class McpServer : public QObject
 		Settings *settings;
 		QWebSocketServer *ws_server;
 		QList<QWebSocket *> clients;
+		QList<QJsonObject> event_queue;
+		static constexpr int MAX_EVENT_QUEUE = 100;
 		QSet<QWebSocket *> authenticated;
 		QWebSocket *active_client;
 
@@ -52,6 +62,13 @@ class McpServer : public QObject
 		bool session_owned;
 		ChiakiLog chiaki_log;
 		QByteArray connect_host_buf;  // keeps host string alive for ChiakiConnectInfo
+
+		// Connected session metadata — saved at CmdConnect, used by CmdStatus
+		QString connected_host_name;
+		QString connected_console;
+		ChiakiConnectVideoProfile connected_video_profile;
+		ChiakiFfmpegDecoder *ffmpeg_decoder;
+		ChiakiFfmpegDecoder *ffmpeg_decoder;
 
 		// Login PIN pending state
 		bool login_pin_pending;
@@ -88,6 +105,9 @@ class McpServer : public QObject
 		QJsonObject CmdDisconnect();
 		QJsonObject CmdLoginPin(const QJsonObject &params);
 		QJsonObject CmdStatus();
+		void CmdScreenshot(QWebSocket *client, const QJsonValue &id);
+		void OnSessionEvent(ChiakiEvent *event);
+		QJsonObject CmdEvents()(QWebSocket *client, const QJsonValue &id);
 		QJsonObject CmdPress(const QJsonObject &params);
 		QJsonObject CmdStick(const QJsonObject &params);
 		QJsonObject CmdTrigger(const QJsonObject &params);

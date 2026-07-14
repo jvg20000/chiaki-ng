@@ -191,6 +191,9 @@ McpServer::McpServer(Settings *settings, QObject *parent)
 	, pending_regist_client(nullptr)
 	, chiaki_regist_ptr(nullptr)
 	, regist_active(false)
+	, connected_host_name()
+	, connected_console()
+	, connected_video_profile()
 {
 	ws_server = new QWebSocketServer(
 		QStringLiteral("chiaki-ng MCP"),
@@ -517,6 +520,62 @@ QJsonObject McpServer::CmdStatus()
 {
 	QJsonObject r;
 	r[QStringLiteral("state")] = StateString();
+
+	if(state == McpState::Idle || !chiaki_session)
+	{
+		// Sin sesión: devolver solo state + defaults
+		r[QStringLiteral("host")] = QJsonValue();
+		r[QStringLiteral("console")] = QJsonValue();
+		r[QStringLiteral("resolution")] = QJsonValue();
+		r[QStringLiteral("fps")] = 0;
+		r[QStringLiteral("codec")] = QJsonValue();
+		r[QStringLiteral("bitrate_kbps")] = 0;
+		r[QStringLiteral("packet_loss")] = 0.0;
+		r[QStringLiteral("rtt_ms")] = 0.0;
+		r[QStringLiteral("audio")] = false;
+		r[QStringLiteral("rumble")] = false;
+		r[QStringLiteral("mic_muted")] = false;
+		return r;
+	}
+
+	// ── Campos guardados en CmdConnect ────────────────────────────────────
+	r[QStringLiteral("host")] = connected_host_name.isEmpty()
+		? QJsonValue() : connected_host_name;
+	r[QStringLiteral("console")] = connected_console.isEmpty()
+		? QJsonValue() : connected_console;
+
+	// ── Video profile ─────────────────────────────────────────────────────
+	const auto &vp = chiaki_session->connect_info.video_profile;
+	QString res = QStringLiteral("%1x%2")
+		.arg(vp.width).arg(vp.height);
+	r[QStringLiteral("resolution")] = (vp.width > 0) ? QJsonValue(res) : QJsonValue();
+	r[QStringLiteral("fps")] = static_cast<int>(vp.max_fps);
+	r[QStringLiteral("codec")] = QString::fromUtf8(chiaki_codec_name(vp.codec));
+	r[QStringLiteral("bitrate_kbps")] = static_cast<int>(vp.bitrate);
+
+	// ── RTT ───────────────────────────────────────────────────────────────
+	r[QStringLiteral("rtt_ms")] = chiaki_session->rtt_us / 1000.0;
+
+	// ── Packet loss desde stream_connection stats ─────────────────────────
+	double packet_loss = 0.0;
+	if(state == McpState::Streaming)
+	{
+		uint64_t received = 0, lost = 0;
+		chiaki_packet_stats_get(&chiaki_session->stream_connection.packet_stats,
+			false, &received, &lost);
+		uint64_t total = received + lost;
+		if(total > 0)
+			packet_loss = (static_cast<double>(lost) / static_cast<double>(total)) * 100.0;
+	}
+	r[QStringLiteral("packet_loss")] = packet_loss;
+
+	// ── Audio / rumble / mic ──────────────────────────────────────────────
+	bool audio_enabled = !(chiaki_session->connect_info.disable_audio_video
+		& CHIAKI_AUDIO_DISABLED);
+	r[QStringLiteral("audio")] = audio_enabled;
+	r[QStringLiteral("rumble")] = chiaki_session->connect_info.enable_dualsense;
+	r[QStringLiteral("mic_muted")] = false; // not exposed by chiaki_session
+
 	return r;
 }
 
@@ -714,6 +773,12 @@ QJsonObject McpServer::CmdConnect(const QJsonObject &params)
 	}
 
 	SetState(McpState::Connected);
+
+	// ── Guardar metadata de la conexión para CmdStatus ────────────────────
+	connected_host_name = name;
+	connected_console = chiaki_target_is_ps5(rh.GetTarget())
+		? QStringLiteral("PS5") : QStringLiteral("PS4");
+	connected_video_profile = info.video_profile;
 
 	return {{QStringLiteral("state"), StateString()},
 		{QStringLiteral("host"), name},
@@ -1045,6 +1110,11 @@ void McpServer::CleanupSession()
 	session_owned = false;
 	login_pin_pending = false;
 	pending_pin_client = nullptr;
+
+	// Reset connection metadata
+	connected_host_name.clear();
+	connected_console.clear();
+	memset(&connected_video_profile, 0, sizeof(connected_video_profile));
 }
 
 void McpServer::SessionEventCb(ChiakiEvent *event, void *user)
@@ -1267,4 +1337,203 @@ void McpServer::OnRegistFailed()
 	pending_pair_host.clear();
 	pending_regist_client = nullptr;
 	pending_regist_id = QJsonValue::Undefined;
+void McpServer::CmdScreenshot(QWebSocket *client, const QJsonValue &id)
+{
+	if(!StateAllowsStream())
+	{
+		SendError(client, id,
+			QStringLiteral("no_stream"),
+			QStringLiteral("El stream de vídeo no está activo aún"));
+		return;
+	}
+
+	if(!ffmpeg_decoder)
+	{
+		SendError(client, id,
+			QStringLiteral("internal_error"),
+			QStringLiteral("No decoder available"));
+		return;
+	}
+
+	// Pull latest frame from decoder (may steal one frame from renderer —
+	// acceptable for occasional screenshot requests)
+	int32_t frames_lost;
+	ChiakiFfmpegFrame frame = chiaki_ffmpeg_decoder_pull_frame(ffmpeg_decoder, &frames_lost);
+	if(!frame.frame)
+	{
+		SendError(client, id,
+			QStringLiteral("no_frame"),
+			QStringLiteral("No frame available from decoder"));
+		return;
+	}
+
+	AVFrame *av = frame.frame;
+	int width = av->width;
+	int height = av->height;
+
+	if(width <= 0 || height <= 0)
+	{
+		av_frame_free(&frame.frame);
+		SendError(client, id,
+			QStringLiteral("invalid_frame"),
+			QStringLiteral("Frame has invalid dimensions"));
+		return;
+	}
+
+	// Convert AVFrame → RGB24 via swscale
+	SwsContext *sws = sws_getContext(
+		width, height, static_cast<AVPixelFormat>(av->format),
+		width, height, AV_PIX_FMT_RGB24,
+		SWS_BILINEAR, nullptr, nullptr, nullptr);
+
+	if(!sws)
+	{
+		av_frame_free(&frame.frame);
+		SendError(client, id,
+			QStringLiteral("encode_error"),
+			QStringLiteral("Failed to create scaler context"));
+		return;
+	}
+
+	QImage img(width, height, QImage::Format_RGB888);
+	uint8_t *dst_data[1] = { img.bits() };
+	int dst_linesize[1] = { static_cast<int>(img.bytesPerLine()) };
+
+	sws_scale(sws, av->data, av->linesize, 0, height, dst_data, dst_linesize);
+	sws_freeContext(sws);
+	av_frame_free(&frame.frame);
+
+	// Encode QImage → JPEG in memory buffer
+	QByteArray jpeg_data;
+	QBuffer buffer(&jpeg_data);
+	buffer.open(QIODevice::WriteOnly);
+	if(!img.save(&buffer, "JPEG", 85))
+	{
+		SendError(client, id,
+			QStringLiteral("encode_error"),
+			QStringLiteral("Failed to encode JPEG"));
+		return;
+	}
+
+	// Send binary JPEG frame first (magic bytes 0xFF 0xD8)
+	// The TypeScript client detects this and combines with the JSON response
+	client->sendBinaryMessage(jpeg_data);
+
+	// Send JSON metadata response
+	QJsonObject meta;
+	meta[QStringLiteral("ok")] = true;
+
+
+	QJsonArray events;
+	for(const QJsonObject &ev : event_queue)
+		events.append(ev);
+
+	event_queue.clear();
+
+	QJsonObject r;
+	r[QStringLiteral("events")] = events;
+	r[QStringLiteral("count")] = events.size();
+	return r;
 }
+
+// ── STREAMING only ──────────────────────────────────────────────────────────
+
+QJsonObject McpServer::CmdScreenshot()
+{
+	if(!StateAllowsStream())
+		return {{QStringLiteral("error"), QStringLiteral("no_stream")},
+			{QStringLiteral("message"), QStringLiteral("El stream de vídeo no está activo aún")}};
+
+	// stub — capturaría frame del decoder FFMPEG
+	return {};
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Session lifecycle — MCP-initiated connections
+// ═════════════════════════════════════════════════════════════════════════════
+
+void McpServer::CleanupSession()
+{
+	if(!session_owned || !chiaki_session)
+		return;
+
+	chiaki_session_fini(chiaki_session);
+	delete chiaki_session;
+	chiaki_session = nullptr;
+	session_owned = false;
+	login_pin_pending = false;
+	pending_pin_client = nullptr;
+}
+
+void McpServer::SessionEventCb(ChiakiEvent *event, void *user)
+{
+	auto *self = static_cast<McpServer *>(user);
+	QMetaObject::invokeMethod(self, [self, e = *event]() mutable {
+		self->OnSessionEvent(&e);
+	}, Qt::QueuedConnection);
+}
+
+void McpServer::OnSessionEvent(ChiakiEvent *event)
+{
+	switch(event->type)
+	{
+		case CHIAKI_EVENT_LOGIN_PIN_REQUEST:
+		{
+			login_pin_pending = true;
+			pending_pin_client = active_client;
+
+			QJsonObject notif;
+			notif[QStringLiteral("type")] = QStringLiteral("pin_request");
+			notif[QStringLiteral("message")] = event->login_pin_request.pin_incorrect
+				? QStringLiteral("PIN incorrecto. Intenta de nuevo")
+				: QStringLiteral("PS5/PS4 solicita PIN de acceso");
+
+			QJsonDocument doc(notif);
+			QString payload = QString::fromUtf8(doc.toJson(QJsonDocument::Compact));
+
+			for(auto *c : clients)
+				c->sendTextMessage(payload);
+			break;
+		}
+		case CHIAKI_EVENT_QUIT:
+		{
+			CleanupSession();
+
+			QJsonObject notif;
+			notif[QStringLiteral("type")] = QStringLiteral("quit");
+			notif[QStringLiteral("reason")] = QString::fromUtf8(
+				chiaki_quit_reason_string(event->quit.reason));
+
+			QJsonDocument doc(notif);
+			QString payload = QString::fromUtf8(doc.toJson(QJsonDocument::Compact));
+
+			for(auto *c : clients)
+				c->sendTextMessage(payload);
+
+			SetState(McpState::Idle);
+			break;
+		}
+		case CHIAKI_EVENT_RUMBLE:
+		{
+			QJsonObject rumble;
+			rumble[QStringLiteral("type")] = QStringLiteral("rumble");
+			rumble[QStringLiteral("motor")] = QStringLiteral("both");
+			rumble[QStringLiteral("left")] = static_cast<int>(event->rumble.left);
+			rumble[QStringLiteral("right")] = static_cast<int>(event->rumble.right);
+
+			event_queue.append(rumble);
+			while(event_queue.size() > MAX_EVENT_QUEUE)
+				event_queue.removeFirst();
+			break;
+		}
+		case CHIAKI_EVENT_LED_COLOR:
+		{
+			QJsonObject led;
+			led[QStringLiteral("type")] = QStringLiteral("led");
+			led[QStringLiteral("r")] = static_cast<int>(event->led_state[0]);
+			led[QStringLiteral("g")] = static_cast<int>(event->led_state[1]);
+			led[QStringLiteral("b")] = static_cast<int>(event->led_state[2]);
+
+			event_queue.append(led);
+			while(event_queue.size() > MAX_EVENT_QUEUE)
+				event_queue.removeFirst();
