@@ -160,6 +160,10 @@ class QmlSettings : public QObject
     Q_PROPERTY(int placeboToneMappingToneLutSize READ placeboToneMappingToneLutSize WRITE setPlaceboToneMappingToneLutSize NOTIFY placeboToneMappingToneLutSizeChanged)
     Q_PROPERTY(float placeboToneMappingContrastRecovery READ placeboToneMappingContrastRecovery WRITE setPlaceboToneMappingContrastRecovery NOTIFY placeboToneMappingContrastRecoveryChanged)
     Q_PROPERTY(float placeboToneMappingContrastSmoothness READ placeboToneMappingContrastSmoothness WRITE setPlaceboToneMappingContrastSmoothness NOTIFY placeboToneMappingContrastSmoothnessChanged)
+    Q_PROPERTY(bool mcpEnabled READ mcpEnabled WRITE setMcpEnabled NOTIFY mcpEnabledChanged)
+    Q_PROPERTY(int mcpPort READ mcpPort WRITE setMcpPort NOTIFY mcpPortChanged)
+    Q_PROPERTY(bool mcpExpose READ mcpExpose WRITE setMcpExpose NOTIFY mcpExposeChanged)
+    Q_PROPERTY(QString mcpToken READ mcpToken WRITE setMcpToken NOTIFY mcpTokenChanged)
 
 public:
     QmlSettings(Settings *settings, QObject *parent = nullptr);
@@ -529,6 +533,15 @@ public:
     float placeboToneMappingContrastSmoothness() const;
     void setPlaceboToneMappingContrastSmoothness(float smoothness);
 
+    bool mcpEnabled() const;
+    void setMcpEnabled(bool enabled);
+    int mcpPort() const;
+    void setMcpPort(int port);
+    bool mcpExpose() const;
+    void setMcpExpose(bool expose);
+    QString mcpToken() const;
+    void setMcpToken(const QString &token);
+
     QString psnAuthToken() const;
     void setPsnAuthToken(const QString &auth_token);
 
@@ -761,6 +774,10 @@ signals:
     void placeboToneMappingToneLutSizeChanged();
     void placeboToneMappingContrastRecoveryChanged();
     void placeboToneMappingContrastSmoothnessChanged();
+    void mcpEnabledChanged();
+    void mcpPortChanged();
+    void mcpExposeChanged();
+    void mcpTokenChanged();
     void placeboChanged();
 
 private:

@@ -2023,6 +2023,50 @@ void QmlSettings::refreshAllPlaceboKeys()
     emit placeboChanged();
 }
 
+bool QmlSettings::mcpEnabled() const
+{
+    return settings->GetMcpEnabled();
+}
+
+void QmlSettings::setMcpEnabled(bool enabled)
+{
+    settings->SetMcpEnabled(enabled);
+    emit mcpEnabledChanged();
+}
+
+int QmlSettings::mcpPort() const
+{
+    return settings->GetMcpPort();
+}
+
+void QmlSettings::setMcpPort(int port)
+{
+    settings->SetMcpPort(port);
+    emit mcpPortChanged();
+}
+
+bool QmlSettings::mcpExpose() const
+{
+    return settings->GetMcpExpose();
+}
+
+void QmlSettings::setMcpExpose(bool expose)
+{
+    settings->SetMcpExpose(expose);
+    emit mcpExposeChanged();
+}
+
+QString QmlSettings::mcpToken() const
+{
+    return settings->GetMcpToken();
+}
+
+void QmlSettings::setMcpToken(const QString &token)
+{
+    settings->SetMcpToken(token);
+    emit mcpTokenChanged();
+}
+
 void QmlSettings::exportSettings()
 {
     QString profile = settings->GetCurrentProfile();

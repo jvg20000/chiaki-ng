@@ -20,6 +20,9 @@ DialogView {
     title: qsTr("Settings")
     header: qsTr("* Defaults in () to right of value or marked with (Default)")
     buttonVisible: false
+    function mcpNewToken() {
+        return Qt.md5(Date.now().toString() + Math.random().toString()).substring(0, 32)
+    }
     function flickContainsItem(flick, item) {
         let current = item;
         while (current) {
@@ -99,6 +102,7 @@ DialogView {
         case 6: item = controllerMappingChange; break;
         case 7: item = firstRemoteFocusableItem(); break;
         case 8: item = profile; break;
+        case 9: item = mcpEnabledSwitch; break;
         }
         if (item)
             item.forceActiveFocus(Qt.TabFocusReason);
@@ -114,6 +118,7 @@ DialogView {
         case 6: return controllersFlick;
         case 7: return remoteFlick;
         case 8: return configFlick;
+        case 9: return mcpFlick;
         default: return null;
         }
     }
@@ -407,15 +412,45 @@ DialogView {
                 focusPolicy: Qt.NoFocus
                 Image {
                     anchors {
-                        left: config.left
+                        right: config.left
                         verticalCenter: parent.verticalCenter
-                        leftMargin: -15
+                        rightMargin: -15
                     }
                     width: 28
                     height: 28
                     sourceSize: Qt.size(width, height)
                     source: "qrc:/icons/r1.svg"
                     visible: bar.currentIndex == 7
+                }
+                Image {
+                    anchors {
+                        left: config.right
+                        verticalCenter: parent.verticalCenter
+                        leftMargin: -15
+                    }
+                    width: 28
+                    height: 28
+                    sourceSize: Qt.size(width, height)
+                    source: "qrc:/icons/l1.svg"
+                    visible: bar.currentIndex == 9
+                }
+            }
+
+            TabButton {
+                text: qsTr("MCP")
+                id: mcp
+                focusPolicy: Qt.NoFocus
+                Image {
+                    anchors {
+                        right: mcp.left
+                        verticalCenter: parent.verticalCenter
+                        rightMargin: -15
+                    }
+                    width: 28
+                    height: 28
+                    sourceSize: Qt.size(width, height)
+                    source: "qrc:/icons/r1.svg"
+                    visible: bar.currentIndex == 8
                 }
             }
         }
@@ -3043,6 +3078,125 @@ DialogView {
                             checked: Chiaki.settings.logVerbose
                             lastInFocusChain: true
                             onToggled: Chiaki.settings.logVerbose = checked
+                        }
+                    }
+                }
+            }
+
+            Item {
+                // MCP Server
+                Flickable {
+                    id: mcpFlick
+                    anchors {
+                        fill: parent
+                        topMargin: 20
+                        bottomMargin: 20
+                    }
+                    clip: true
+                    contentWidth: Math.max(width, mcpGrid.width)
+                    contentHeight: mcpGrid.y + mcpGrid.height
+                    flickableDirection: Flickable.AutoFlickIfNeeded
+                    ScrollBar.vertical: ScrollBar {
+                        policy: ScrollBar.AlwaysOn
+                        visible: mcpFlick.contentHeight > mcpFlick.height
+                    }
+                    GridLayout {
+                        id: mcpGrid
+                        anchors {
+                            top: parent.top
+                            horizontalCenter: parent.horizontalCenter
+                            topMargin: 30
+                        }
+                        columns: 3
+                        rowSpacing: 20
+                        columnSpacing: 10
+
+                        Label {
+                            Layout.alignment: Qt.AlignRight
+                            text: qsTr("Enable MCP Server:")
+                        }
+
+                        C.CheckBox {
+                            id: mcpEnabledSwitch
+                            firstInFocusChain: true
+                            checked: Chiaki.settings.mcpEnabled
+                            onToggled: Chiaki.settings.mcpEnabled = checked
+                        }
+
+                        Label {
+                            Layout.alignment: Qt.AlignRight
+                            text: qsTr("(Unchecked)")
+                        }
+
+                        Label {
+                            Layout.alignment: Qt.AlignRight
+                            text: qsTr("Port:")
+                        }
+
+                        SpinBox {
+                            id: mcpPortSpin
+                            Layout.preferredWidth: 200
+                            from: 1024
+                            to: 65535
+                            value: Chiaki.settings.mcpPort
+                            onValueChanged: Chiaki.settings.mcpPort = value
+                        }
+
+                        Label {
+                            Layout.alignment: Qt.AlignRight
+                            text: qsTr("(9090)")
+                        }
+
+                        Label {
+                            Layout.alignment: Qt.AlignRight
+                            text: qsTr("Expose to network (0.0.0.0):")
+                        }
+
+                        C.CheckBox {
+                            id: mcpExposeSwitch
+                            checked: Chiaki.settings.mcpExpose
+                            onToggled: {
+                                Chiaki.settings.mcpExpose = checked
+                                if (checked && !Chiaki.settings.mcpToken) {
+                                    Chiaki.settings.mcpToken = mcpNewToken()
+                                }
+                            }
+                        }
+
+                        Label {
+                            Layout.alignment: Qt.AlignRight
+                            text: qsTr("(Unchecked)")
+                        }
+
+                        Label {
+                            Layout.alignment: Qt.AlignRight
+                            text: qsTr("Auth Token:")
+                        }
+
+                        RowLayout {
+                            Layout.preferredWidth: 400
+                            spacing: 10
+
+                            C.TextField {
+                                id: mcpTokenField
+                                Layout.fillWidth: true
+                                readOnly: true
+                                text: Chiaki.settings.mcpToken
+                                placeholderText: qsTr("Token will be auto-generated on expose")
+                            }
+
+                            C.Button {
+                                text: qsTr("New")
+                                onClicked: {
+                                    Chiaki.settings.mcpToken = mcpNewToken()
+                                }
+                                Material.roundedScale: Material.SmallScale
+                            }
+                        }
+
+                        Label {
+                            Layout.alignment: Qt.AlignRight
+                            text: qsTr("")
                         }
                     }
                 }
