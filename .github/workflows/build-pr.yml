@@ -1,13 +1,13 @@
-name: Build chiaki-ng PR (Linux)
+name: Build chiaki-ng PR
 
 on:
   pull_request:
     types: [opened, synchronize, reopened]
-  workflow_dispatch:
 
 jobs:
+  # ── Linux (devcontainer) ────────────────────────────────────────────
   build-linux:
-    name: Build Linux (devcontainer)
+    name: Linux (devcontainer)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -15,30 +15,164 @@ jobs:
           submodules: recursive
 
       - name: Build devcontainer image
-        run: |
-          docker build -t chiaki-devcontainer -f .devcontainer/Dockerfile .devcontainer/
+        run: docker build -t chiaki-devcontainer -f .devcontainer/Dockerfile .devcontainer/
 
-      - name: Configure
+      - name: Configure & Build
         run: |
           mkdir -p build
-          docker run --rm -u root -v ${{ github.workspace }}:/workspace -w /workspace \
+          docker run --rm -u root \
+            -v ${{ github.workspace }}:/workspace \
+            -w /workspace \
             chiaki-devcontainer bash -c "
-              cd build && \
+              cd build &&
               cmake .. -G Ninja -DCMAKE_BUILD_TYPE=Release \
                 -DCHIAKI_ENABLE_TESTS=OFF \
                 -DCHIAKI_ENABLE_CLI=ON \
-                -DCHIAKI_ENABLE_GUI=ON
+                -DCHIAKI_ENABLE_GUI=ON &&
+              ninja -j\$(nproc)
             "
 
-      - name: Build
+  # ── Windows (MSYS2) ─────────────────────────────────────────────────
+  build-windows:
+    name: Windows (MSYS2)
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - name: Disable autocrlf
+        shell: pwsh
         run: |
-          docker run --rm -u root -v ${{ github.workspace }}:/workspace -w /workspace \
-            chiaki-devcontainer bash -c "cd build && ninja -j\$(nproc)"
+          git config --global core.autocrlf false
+          git config --global core.eol lf
 
-      - name: Verify binaries
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: mingw64
+          update: true
+          install: git
+          pacboy: >-
+            ca-certificates:p
+            cc:p
+            cmake:p
+            curl:p
+            fast_float:p
+            fftw:p
+            hidapi:p
+            json-c:p
+            lcms2:p
+            libdovi:p
+            meson:p
+            miniupnpc:p
+            gcc:p
+            nasm:p
+            ninja:p
+            openssl:p
+            opus:p
+            pkgconf:p
+            protobuf:p
+            python:p
+            python-psutil:p
+            python-glad:p
+            python-jinja:p
+            python-pip:p
+            qt6-base:p
+            qt6-declarative:p
+            qt6-svg:p
+            shaderc:p
+            speexdsp:p
+            spirv-cross:p
+            vulkan:p
+            vulkan-headers:p
+            libevent:p
+
+      - name: Install tools
         run: |
-          docker run --rm -u root -v ${{ github.workspace }}:/workspace -w /workspace \
-            chiaki-devcontainer bash -c "
-              file build/gui/chiaki build/cli/chiaki-cli && \
-              echo '✅ Build OK'
-            "
+          pip install protobuf
+          pacman -S git make unzip zip --noconfirm
+
+      - name: Build libplacebo
+        run: scripts/build-libplacebo-windows.sh
+
+      - name: Setup ffmpeg
+        run: |
+          curl -LO https://github.com/streetpea/FFmpeg-Builds/releases/download/latest/ffmpeg-n7.1-latest-win64-gpl-shared-7.1.zip
+          unzip ffmpeg-n7.1-latest-win64-gpl-shared-7.1.zip
+          cp -a "ffmpeg-n7.1-latest-win64-gpl-shared-7.1/bin/." /mingw64/bin
+          cp -a "ffmpeg-n7.1-latest-win64-gpl-shared-7.1/include/." /mingw64/include
+          cp -a "ffmpeg-n7.1-latest-win64-gpl-shared-7.1/lib/." /mingw64/lib
+
+      - name: Build sdl2-compat
+        run: |
+          INSTALL_PREFIX=/mingw64 scripts/build-sdl2-compat.sh .
+          cp /mingw64/lib/pkgconfig/sdl2-compat.pc /mingw64/lib/pkgconfig/sdl2.pc
+
+      - name: Configure & Build
+        run: |
+          cmake -S . -B build -G "Ninja" -DCMAKE_BUILD_TYPE=Release -DCHIAKI_ENABLE_CLI=OFF
+          cmake --build build --config Release --target chiaki
+
+  # ── macOS ARM ───────────────────────────────────────────────────────
+  build-macos-arm:
+    name: macOS ARM
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install deps
+        run: |
+          pip3 install --user 'protobuf>=5,<6' --break-system-packages
+          brew update
+          brew uninstall pkgconfig || true
+          brew install qt@6 ffmpeg pkgconfig opus openssl cmake ninja nasm \
+            protobuf@29 speexdsp libplacebo wget python-setuptools json-c \
+            miniupnpc libevent
+
+      - name: Build sdl2-compat
+        run: |
+          sudo INSTALL_PREFIX=/usr/local scripts/build-sdl2-compat.sh
+          sudo cp /usr/local/lib/pkgconfig/sdl2-compat.pc /usr/local/lib/pkgconfig/sdl2.pc
+
+      - name: Configure & Build
+        run: |
+          cmake -S . -B build -G "Ninja" -DCMAKE_BUILD_TYPE=Release \
+            -DCHIAKI_ENABLE_CLI=OFF -DCHIAKI_ENABLE_STEAMDECK_NATIVE=OFF \
+            -DCMAKE_PREFIX_PATH="$(brew --prefix)/opt/openssl@3;$(brew --prefix)/opt/qt@6;$(brew --prefix)/opt/protobuf@29"
+          export CPATH=$(brew --prefix)/opt/ffmpeg/include
+          cmake --build build --config Release --target chiaki
+
+  # ── macOS Intel ─────────────────────────────────────────────────────
+  build-macos-x64:
+    name: macOS Intel
+    runs-on: macos-15-intel
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install deps
+        run: |
+          pip3 install --user 'protobuf>=5,<6' --break-system-packages
+          brew update
+          brew install --force qt@6 ffmpeg pkgconfig opus openssl cmake ninja nasm \
+            protobuf@29 speexdsp libplacebo wget python-setuptools json-c \
+            miniupnpc libevent || true
+
+      - name: Build sdl2-compat
+        run: |
+          sudo INSTALL_PREFIX=/usr/local scripts/build-sdl2-compat.sh
+          sudo cp /usr/local/lib/pkgconfig/sdl2-compat.pc /usr/local/lib/pkgconfig/sdl2.pc
+
+      - name: Configure & Build
+        run: |
+          cmake -S . -B build -G "Ninja" -DCMAKE_BUILD_TYPE=Release \
+            -DCHIAKI_ENABLE_CLI=OFF -DCHIAKI_ENABLE_STEAMDECK_NATIVE=OFF \
+            -DCMAKE_PREFIX_PATH="$(brew --prefix)/opt/openssl@3;$(brew --prefix)/opt/qt@6;$(brew --prefix)/opt/protobuf@29"
+          export CPATH=$(brew --prefix)/opt/ffmpeg/include
+          cmake --build build --config Release --target chiaki
