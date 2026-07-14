@@ -86,17 +86,17 @@ jobs:
 
       - name: Package tarball
         run: |
-          mkdir -p ../dist
-          npm pack --pack-destination ../dist
+          mkdir -p dist
+          npm pack --pack-destination dist
 
       - uses: actions/upload-artifact@v4
         with:
-          name: chiaki-mcp-${{ needs.check-version.outputs.tag }}
+          name: ${{ needs.check-version.outputs.tag }}
           path: mcp/dist/*.tgz
 
   publish-github-packages:
     name: Publish to GitHub Packages
-    needs: build
+    needs: [check-version, build]
     runs-on: ubuntu-latest
     permissions:
       packages: write
@@ -139,7 +139,7 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
-          name: chiaki-mcp-${{ needs.check-version.outputs.tag }}
+          name: ${{ needs.check-version.outputs.tag }}
           path: dist
 
       - name: Create Release
