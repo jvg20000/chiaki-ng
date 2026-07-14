@@ -14,6 +14,7 @@
 #include <QHostAddress>
 
 #include <chiaki/regist.h>
+#include <chiaki/session.h>
 #include <chiaki/log.h>
 
 class Settings;
@@ -47,6 +48,20 @@ class McpServer : public QObject
 		ChiakiControllerState *controller_state;
 		bool controller_state_dirty;
 
+		// Session ownership — for MCP-initiated connections (CmdConnect)
+		bool session_owned;
+		ChiakiLog chiaki_log;
+		QByteArray connect_host_buf;  // keeps host string alive for ChiakiConnectInfo
+
+		// Login PIN pending state
+		bool login_pin_pending;
+		QWebSocket *pending_pin_client;
+
+		// Session lifecycle helpers
+		void CleanupSession();
+		static void SessionEventCb(ChiakiEvent *event, void *user);
+		void OnSessionEvent(ChiakiEvent *event);
+
 		bool StateAllowsControl() const;
 		bool StateAllowsStream() const;
 		QString StateString() const;
@@ -71,6 +86,7 @@ class McpServer : public QObject
 		QJsonObject CmdPairConfirm(const QJsonObject &params);
 		QJsonObject CmdConnect(const QJsonObject &params);
 		QJsonObject CmdDisconnect();
+		QJsonObject CmdLoginPin(const QJsonObject &params);
 		QJsonObject CmdStatus();
 		QJsonObject CmdPress(const QJsonObject &params);
 		QJsonObject CmdStick(const QJsonObject &params);
