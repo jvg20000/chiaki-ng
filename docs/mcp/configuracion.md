@@ -13,20 +13,63 @@ Accesible desde la pestaña **"MCP"** en Settings (`SettingsDialog.qml`):
 
 ### Reglas de autenticación
 
-- **Localhost** (`expose=false`): bind a `127.0.0.1`. **No requiere token** — el handshake WebSocket se acepta sin `token`.
-- **Red** (`expose=true`): bind a `0.0.0.0`. **Requiere token** — el cliente debe incluir `"token": "<hex>"` en el handshake. Si está vacío al activar, se autogenera uno de 128 caracteres hexadecimales.
+- **Localhost** (`expose=false`): bind a `127.0.0.1`. **No requiere token**.
+- **Red** (`expose=true`): bind a `0.0.0.0`. **Requiere token**. Si está vacío al activar, se autogenera uno de 128 caracteres hexadecimales.
 
 El botón **"New"** regenera el token inmediatamente (desconecta clientes activos).
 
 ### Cambios en caliente
 
-Cualquier cambio en enable/port/expose/token reinicia el `McpServer` automáticamente via `HandleMcpSettingsChanged()` en `StreamSession`. No es necesario reiniciar chiaki-ng.
+Cualquier cambio en enable/port/expose/token reinicia el `McpServer` automáticamente. No es necesario reiniciar chiaki-ng.
 
 ---
 
-## Configuración de chiaki-mcp (TypeScript)
+## Instalación de chiaki-mcp
 
-El servidor MCP TypeScript se configura con variables de entorno:
+### Opción A: GitHub Packages (recomendado, sin configurar secrets)
+
+El CD publica automáticamente en GitHub Packages al mergear a `main`/`develop`. Usa `GITHUB_TOKEN` (siempre disponible).
+
+```bash
+# Configurar registro (una sola vez, necesita un PAT con read:packages)
+npm config set @jvg20000:registry https://npm.pkg.github.com
+npm config set //npm.pkg.github.com/:_authToken TU_GITHUB_TOKEN
+
+# Instalar
+npm install -g @jvg20000/chiaki-mcp
+```
+
+- **Estable**: `npm install -g @jvg20000/chiaki-mcp` (latest, desde main)
+- **Desarrollo**: `npm install -g @jvg20000/chiaki-mcp@dev` (desde develop)
+
+El binario queda como `chiaki-mcp` en el PATH.
+
+### Opción B: Desde el repositorio (sin registros, sin token)
+
+```bash
+cd ~/projects/chiaki-ng/mcp/
+npm install
+npm run build
+npm test
+```
+
+O instalar global desde local:
+```bash
+npm install -g ~/projects/chiaki-ng/mcp/
+```
+
+### Opción C: GitHub Release (tarball)
+
+Descargar de [Releases](https://github.com/jvg20000/chiaki-ng/releases) (tag `mcp-vX.Y.Z`):
+```bash
+npm install -g https://github.com/jvg20000/chiaki-ng/releases/download/mcp-v1.0.0/chiaki-mcp-1.0.0.tgz
+```
+
+---
+
+## Configuración de chiaki-mcp
+
+Variables de entorno:
 
 | Variable | Default | Descripción |
 |---|---|---|
@@ -37,32 +80,31 @@ El servidor MCP TypeScript se configura con variables de entorno:
 | `CHIAKI_MAX_RETRIES` | `0` | Reintentos máximos por comando fallido |
 | `LOG_LEVEL` | `info` | Nivel de log: `debug`, `info`, `warn`, `error` |
 
-### Ejemplos de configuración
+### Ejemplos
 
 **Localhost (sin token)**:
 ```bash
-CHIAKI_HOST=127.0.0.1 CHIAKI_PORT=9090 node dist/index.js
+CHIAKI_HOST=127.0.0.1 CHIAKI_PORT=9090 chiaki-mcp
 ```
 
 **Remoto (con token)**:
 ```bash
 CHIAKI_HOST=192.168.1.100 CHIAKI_PORT=9090 \
-  CHIAKI_TOKEN=3f8a9b2c1d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a \
-  node dist/index.js
+  CHIAKI_TOKEN=3f8a9b2c... \
+  chiaki-mcp
 ```
 
 **Debug**:
 ```bash
-LOG_LEVEL=debug CHIAKI_HOST=127.0.0.1 node dist/index.js
+LOG_LEVEL=debug CHIAKI_HOST=127.0.0.1 chiaki-mcp
 ```
 
 ---
 
 ## Integración con Hermes
 
-Configurar en `config.yaml` (el comando varía según instalación):
+En `~/.hermes/profiles/<perfil>/config.yaml`:
 
-**Con npm global:**
 ```yaml
 mcp:
   servers:
@@ -74,21 +116,7 @@ mcp:
         CHIAKI_PORT: "9090"
 ```
 
-**Desde el repositorio:**
-```yaml
-mcp:
-  servers:
-    - name: chiaki-ng
-      type: stdio
-      command: node
-      args:
-        - /ruta/a/chiaki-ng/mcp/dist/index.js
-      env:
-        CHIAKI_HOST: "127.0.0.1"
-        CHIAKI_PORT: "9090"
-```
-
-**Conexión remota (con token):**
+Conexión remota (con token):
 ```yaml
 mcp:
   servers:
@@ -103,54 +131,30 @@ mcp:
 
 ---
 
-## Seguridad
+## Publicación (CD)
 
-### Mejores prácticas
+Al mergear a `main` o `develop` con cambios en `mcp/`:
 
-1. **No exponer a internet directamente** — usar VPN o SSH tunneling si necesitas acceso remoto
-2. **Rotar el token periódicamente** — botón "New" en la UI
-3. **No compartir el token en logs ni commits** — el token se guarda en QSettings (cifrado a nivel de sistema operativo)
-4. **Firewall local**: si `expose=true`, asegurar que solo IPs de confianza alcancen el puerto
+| | main | develop |
+|---|---|---|
+| **GitHub Packages** | `@jvg20000/chiaki-mcp@latest` | `@jvg20000/chiaki-mcp@dev` |
+| **GitHub Release** | Release estable | Prerelease |
+| **Tag** | `mcp-vX.Y.Z` | `mcp-vX.Y.Z-dev-{sha}` |
 
-### SSH tunneling (alternativa a expose)
-
-En lugar de `expose=true`, tuneliza el puerto:
-
-```bash
-# En la máquina AI
-ssh -L 9090:127.0.0.1:9090 usuario@maquina-gaming
-
-# Luego conectas a localhost sin token
-CHIAKI_HOST=127.0.0.1 CHIAKI_PORT=9090 node dist/index.js
-```
+Solo publica si `mcp/package.json` cambió de versión. Usa `GITHUB_TOKEN` (sin secrets manuales).
 
 ---
 
-## Instalación
+## Seguridad
 
-### Desde npm (recomendado)
+1. **No exponer a internet** — usar VPN o SSH tunneling
+2. **Rotar el token** — botón "New" en la UI
+3. **No commitear tokens** — QSettings los guarda cifrados a nivel SO
+4. **Firewall local** si `expose=true`
 
-```bash
-npm install -g chiaki-mcp
-```
-
-El paquete se publica automáticamente al mergear a `main` (tag `latest`) o `develop` (tag `dev`):
-- **Estable**: `npm install -g chiaki-mcp` (latest, desde main)
-- **Desarrollo**: `npm install -g chiaki-mcp@dev` (desde develop)
-
-También disponible como [GitHub Release](https://github.com/jvg20000/chiaki-ng/releases) con tarball adjunto (tag `mcp-vX.Y.Z`).
-
-### Desde el repositorio (desarrollo)
+### SSH tunneling (alternativa a expose)
 
 ```bash
-cd mcp/
-npm install
-npm run build        # tsc → dist/
-npm test             # vitest (21 tests)
-```
-
-Producción:
-```bash
-npm ci --omit=dev    # solo deps de producción
-node dist/index.js
+ssh -L 9090:127.0.0.1:9090 usuario@maquina-gaming
+CHIAKI_HOST=127.0.0.1 CHIAKI_PORT=9090 chiaki-mcp
 ```

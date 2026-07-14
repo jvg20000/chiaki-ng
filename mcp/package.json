@@ -1,5 +1,5 @@
 {
-  "name": "chiaki-mcp",
+  "name": "@jvg20000/chiaki-mcp",
   "version": "1.0.0",
   "description": "MCP server bridging AI models to chiaki-ng PS Remote Play via WebSocket",
   "type": "module",
@@ -32,5 +32,13 @@
   "engines": {
     "node": ">=20.0.0"
   },
-  "license": "AGPL-3.0"
+  "license": "AGPL-3.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jvg20000/chiaki-ng.git",
+    "directory": "mcp"
+  },
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com"
+  }
 }

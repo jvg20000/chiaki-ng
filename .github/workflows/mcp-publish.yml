@@ -32,13 +32,12 @@ jobs:
 
           if [ "$CURRENT" != "$PREVIOUS" ]; then
             echo "changed=true" >> $GITHUB_OUTPUT
-            echo "✅ Version changed: ${PREVIOUS} → ${CURRENT}"
+            echo "Version changed: ${PREVIOUS} -> ${CURRENT}"
           else
             echo "changed=false" >> $GITHUB_OUTPUT
-            echo "⏭️  Version unchanged (${CURRENT}), skipping publish"
+            echo "Version unchanged (${CURRENT}), skipping publish"
           fi
 
-          # Misma convención que release.yml: -dev-{sha} en develop
           if [ "$BRANCH" = "main" ]; then
             TAG="mcp-v${CURRENT}"
             PRERELEASE="false"
@@ -50,7 +49,6 @@ jobs:
           fi
 
           echo "current=${CURRENT}" >> $GITHUB_OUTPUT
-          echo "previous=${PREVIOUS}" >> $GITHUB_OUTPUT
           echo "tag=${TAG}" >> $GITHUB_OUTPUT
           echo "prerelease=${PRERELEASE}" >> $GITHUB_OUTPUT
           echo "title=${TITLE}" >> $GITHUB_OUTPUT
@@ -86,35 +84,33 @@ jobs:
           name: chiaki-mcp-${{ needs.check-version.outputs.tag }}
           path: mcp/dist/chiaki-mcp-*.tgz
 
-  publish-npm:
-    name: Publish to npm
+  publish-github-packages:
+    name: Publish to GitHub Packages
     needs: build
-    if: needs.check-version.outputs.changed == 'true'
     runs-on: ubuntu-latest
-    environment:
-      name: npm
-      url: https://www.npmjs.com/package/chiaki-mcp
+    permissions:
+      packages: write
+      contents: read
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
-          registry-url: "https://registry.npmjs.org"
+          registry-url: "https://npm.pkg.github.com"
       - run: npm ci
         working-directory: mcp
       - run: npm run build
         working-directory: mcp
-      - name: Publish (main = latest, develop = dev tag)
+      - name: Publish
         run: |
           if [ "${{ github.ref_name }}" = "main" ]; then
-            npm publish --access public
+            npm publish
           else
-            npm publish --access public --tag dev
+            npm publish --tag dev
           fi
         working-directory: mcp
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        continue-on-error: true
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   github-release:
     name: GitHub Release
