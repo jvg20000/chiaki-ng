@@ -7,13 +7,22 @@ if(APPLE)
 	enable_language(OBJCXX)
 endif()
 
-find_package(Qt6 REQUIRED COMPONENTS Core Gui Concurrent Svg Qml Quick Widgets WebSockets)
+find_package(Qt6 REQUIRED COMPONENTS Core Gui Concurrent Svg Qml Quick Widgets)
 if(Qt6_VERSION VERSION_GREATER_EQUAL "6.10.0")
 	find_package(Qt6 REQUIRED COMPONENTS GuiPrivate)
 endif()
 
 find_package(Qt6 COMPONENTS WebEngineQuick)
 find_package(Qt6 COMPONENTS DBus)
+find_package(Qt6 COMPONENTS WebSockets)
+
+if(Qt6WebSockets_FOUND)
+	message(STATUS "Qt6 WebSockets found — MCP server enabled")
+	set(CHIAKI_ENABLE_MCP ON)
+else()
+	message(STATUS "Qt6 WebSockets not found — MCP server disabled")
+	set(CHIAKI_ENABLE_MCP OFF)
+endif()
 
 if(WIN32)
 	add_definitions(-DWIN32_LEAN_AND_MEAN)
@@ -30,8 +39,6 @@ set(SOURCE_FILES
 	src/sessionlog.cpp
 	include/settings.h
 	src/settings.cpp
-	include/mcpserver.h
-	src/mcpserver.cpp
 	include/host.h
 	src/host.cpp
 	res/resources.qrc
@@ -57,6 +64,12 @@ set(SOURCE_FILES
 	include/systemdinhibit.h
 	src/systemdinhibit.cpp
 	)
+if(CHIAKI_ENABLE_MCP)
+	list(APPEND SOURCE_FILES
+		include/mcpserver.h
+		src/mcpserver.cpp
+	)
+endif()
 set(RESOURCE_FILES "")
 
 if(APPLE)
@@ -105,9 +118,16 @@ if(CHIAKI_ENABLE_CLI)
 	add_definitions(-DCHIAKI_ENABLE_CLI)
 	target_link_libraries(chiaki chiaki-cli-lib)
 endif()
-target_link_libraries(chiaki FFMPEG::swscale)
+if(TARGET FFMPEG::swscale)
+	target_link_libraries(chiaki FFMPEG::swscale)
+	target_compile_definitions(chiaki PRIVATE CHIAKI_HAVE_SWSCALE)
+endif()
 
-target_link_libraries(chiaki Qt::Core Qt::Gui Qt::GuiPrivate Qt::Concurrent Qt::Svg Qt::Qml Qt::Quick Qt::Widgets Qt::WebSockets)
+target_link_libraries(chiaki Qt::Core Qt::Gui Qt::GuiPrivate Qt::Concurrent Qt::Svg Qt::Qml Qt::Quick Qt::Widgets)
+if(CHIAKI_ENABLE_MCP)
+	target_link_libraries(chiaki Qt::WebSockets)
+	target_compile_definitions(chiaki PRIVATE CHIAKI_ENABLE_MCP)
+endif()
 if (${Qt6DBus_FOUND} AND NOT WIN32)
 	target_link_libraries(chiaki Qt::DBus)
 if (NOT APPLE)

@@ -31,7 +31,9 @@
 #include "sessionlog.h"
 #include "controllermanager.h"
 #include "settings.h"
+#ifdef CHIAKI_ENABLE_MCP
 #include "mcpserver.h"
+#endif
 
 #include <QObject>
 #include <QImage>
@@ -244,7 +246,9 @@ class StreamSession : public QObject
 		bool start_mic_unmuted;
 		bool session_started;
 
+#ifdef CHIAKI_ENABLE_MCP
 		McpServer *mcp_server;
+#endif
 
 		ChiakiFfmpegDecoder *ffmpeg_decoder;
 		void TriggerFfmpegFrameAvailable();
@@ -403,7 +407,9 @@ class StreamSession : public QObject
 		void UpdateGamepads();
 		void DpadSendFeedbackState();
 		void SendFeedbackState();
+#ifdef CHIAKI_ENABLE_MCP
 		void HandleMcpSettingsChanged();
+#endif
 };
 
 Q_DECLARE_METATYPE(ChiakiQuitReason)

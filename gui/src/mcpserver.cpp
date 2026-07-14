@@ -21,7 +21,9 @@
 #include <QBuffer>
 
 extern "C" {
+#ifdef CHIAKI_HAVE_SWSCALE
 #include <libswscale/swscale.h>
+#endif
 #include <libavutil/frame.h>
 }
 
@@ -1155,6 +1157,7 @@ void McpServer::CmdScreenshot(QWebSocket *client, const QJsonValue &id)
 	}
 
 	// Convert AVFrame → RGB24 via swscale
+#ifdef CHIAKI_HAVE_SWSCALE
 	SwsContext *sws = sws_getContext(
 		width, height, static_cast<AVPixelFormat>(av->format),
 		width, height, AV_PIX_FMT_RGB24,
@@ -1176,6 +1179,13 @@ void McpServer::CmdScreenshot(QWebSocket *client, const QJsonValue &id)
 	sws_scale(sws, av->data, av->linesize, 0, height, dst_data, dst_linesize);
 	sws_freeContext(sws);
 	av_frame_free(&frame.frame);
+#else
+	av_frame_free(&frame.frame);
+	SendError(client, id,
+		QStringLiteral("not_available"),
+		QStringLiteral("Frame capture requires swscale (not available in this build)"));
+	return;
+#endif
 
 	// Encode QImage → JPEG in memory buffer
 	QByteArray jpeg_data;
