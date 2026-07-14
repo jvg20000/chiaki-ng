@@ -2,13 +2,12 @@ name: MCP Publish
 
 on:
   push:
-    branches: [main]
+    branches: [main, develop]
     paths:
       - "mcp/**"
   workflow_dispatch:
 
 jobs:
-  # ── Check version change ──
   check-version:
     name: Check Version
     runs-on: ubuntu-latest
@@ -35,7 +34,6 @@ jobs:
             echo "⏭️  Version unchanged (${CURRENT}), skipping publish"
           fi
 
-  # ── Build ──
   build:
     name: Build
     needs: check-version
@@ -60,10 +58,57 @@ jobs:
       - run: npm run build
 
       - name: Package tarball
-        run: |
-          npm pack --pack-destination ../dist
+        run: npm pack --pack-destination ../dist
 
       - uses: actions/upload-artifact@v4
         with:
           name: chiaki-mcp-${{ needs.check-version.outputs.version }}
-          path: mcp/dist/chiaki-mcp-*.tgz*  # catch both npm pack output patterns
+          path: mcp/dist/chiaki-mcp-*.tgz
+
+  publish-npm:
+    name: Publish to npm
+    needs: build
+    if: needs.check-version.outputs.changed == 'true'
+    runs-on: ubuntu-latest
+    environment:
+      name: npm
+      url: https://www.npmjs.com/package/chiaki-mcp
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          registry-url: "https://registry.npmjs.org"
+      - run: npm ci
+        working-directory: mcp
+      - run: npm run build
+        working-directory: mcp
+      - name: Publish
+        run: npm publish --access public
+        working-directory: mcp
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        continue-on-error: true  # No bloquea si no hay token npm configurado
+
+  github-release:
+    name: GitHub Release
+    needs: build
+    if: needs.check-version.outputs.changed == 'true' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: chiaki-mcp-${{ needs.check-version.outputs.version }}
+          path: dist
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: mcp-v${{ needs.check-version.outputs.version }}
+          name: "chiaki-mcp v${{ needs.check-version.outputs.version }}"
+          body: "Release automática de chiaki-mcp v${{ needs.check-version.outputs.version }}. Generada al hacer merge a main."
+          files: dist/*.tgz
+          draft: false
+          prerelease: ${{ github.ref == 'refs/heads/develop' }}
