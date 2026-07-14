@@ -2884,9 +2884,9 @@ static void EventCb(ChiakiEvent *event, void *user)
 	StreamSessionPrivate::Event(session, event);
 }
 
+#ifdef CHIAKI_ENABLE_MCP
 void StreamSession::HandleMcpSettingsChanged()
 {
-#ifdef CHIAKI_ENABLE_MCP
 	Settings *s = qobject_cast<Settings *>(sender());
 	if(!s)
 		return;
