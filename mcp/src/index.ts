@@ -52,7 +52,8 @@ const currentLogLevel = LOG_LEVELS[LOG_LEVEL] ?? 1;
 function log(level: string, ...args: unknown[]): void {
   const lvl = LOG_LEVELS[level] ?? 1;
   if (lvl >= currentLogLevel) {
-    console.error(`[chiaki-mcp][${level.toUpperCase()}]`, ...args);
+    const ts = new Date().toISOString();
+    console.error(`[${ts}][chiaki-mcp][${level.toUpperCase()}]`, ...args);
   }
 }
 

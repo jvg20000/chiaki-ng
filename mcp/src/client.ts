@@ -74,6 +74,11 @@ export class ChiakiClient extends EventEmitter {
   private connectResolve: ((() => void) | null) = null;
   private connectReject: ((err: Error) => void) | null = null;
 
+  // Binary frame buffer — for screenshot JPEG frames received before the
+  // corresponding JSON metadata response. The C++ McpServer sends the raw
+  // JPEG as a binary WebSocket frame, then the JSON metadata as a text frame.
+  private lastBinaryData: Buffer | null = null;
+
   constructor(
     host: string,
     port: number,
@@ -237,6 +242,15 @@ export class ChiakiClient extends EventEmitter {
       });
 
       this.ws.on("message", (data: RawData) => {
+        // ── Binary frame detection ──
+        // JPEG binary frames start with 0xFF 0xD8. The C++ McpServer sends
+        // the raw JPEG as a binary frame before the JSON metadata response.
+        const buf = Buffer.isBuffer(data) ? data : Buffer.from(data as ArrayBuffer);
+        if (buf.length >= 2 && buf[0] === 0xff && buf[1] === 0xd8) {
+          this.lastBinaryData = buf;
+          return;
+        }
+
         try {
           const msg = JSON.parse(data.toString());
 
@@ -276,10 +290,25 @@ export class ChiakiClient extends EventEmitter {
           if (entry) {
             this.pending.delete(resp.id);
             if (entry.timer) clearTimeout(entry.timer);
+
+            // ── Combine binary JPEG with text metadata ──
+            // When the C++ side sends a raw JPEG binary frame followed by
+            // JSON metadata, we combine them: encode JPEG → base64, attach
+            // to the response as `screenshot` field.
+            if (this.lastBinaryData) {
+              resp.screenshot = this.lastBinaryData.toString("base64");
+              this.lastBinaryData = null;
+            }
+
             entry.resolve(resp);
           }
         } catch {
-          // Ignore parse errors on raw messages
+          // ── Non-JSON, non-JPEG binary → buffer for potential later use ──
+          if (!(buf.length >= 2 && buf[0] === 0xff && buf[1] === 0xd8)) {
+            // Unknown binary frame — store anyway, could be future protocol
+            this.lastBinaryData = buf;
+          }
+          // (JPEG case was already handled above with early return)
         }
       });
 
