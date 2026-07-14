@@ -1179,13 +1179,6 @@ void McpServer::CmdScreenshot(QWebSocket *client, const QJsonValue &id)
 	sws_scale(sws, av->data, av->linesize, 0, height, dst_data, dst_linesize);
 	sws_freeContext(sws);
 	av_frame_free(&frame.frame);
-#else
-	av_frame_free(&frame.frame);
-	SendError(client, id,
-		QStringLiteral("not_available"),
-		QStringLiteral("Frame capture requires swscale (not available in this build)"));
-	return;
-#endif
 
 	// Encode QImage → JPEG in memory buffer
 	QByteArray jpeg_data;
@@ -1213,6 +1206,13 @@ void McpServer::CmdScreenshot(QWebSocket *client, const QJsonValue &id)
 
 	QJsonDocument doc(meta);
 	client->sendTextMessage(QString::fromUtf8(doc.toJson(QJsonDocument::Compact)));
+#else
+	av_frame_free(&frame.frame);
+	SendError(client, id,
+		QStringLiteral("not_available"),
+		QStringLiteral("Frame capture requires swscale (not available in this build)"));
+	return;
+#endif
 }
 // ═════════════════════════════════════════════════════════════════════════════
 // Session lifecycle — MCP-initiated connections

@@ -2920,9 +2920,9 @@ void StreamSession::HandleMcpSettingsChanged()
 			mcp_server->StopServer();
 			delete mcp_server;
 			mcp_server = nullptr;
-			}
-			#endif
-			}
+		}
+	}
+#endif
 }
 
 #if CHIAKI_GUI_ENABLE_SETSU
