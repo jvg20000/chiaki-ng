@@ -77,12 +77,14 @@ jobs:
       - run: npm run build
 
       - name: Package tarball
-        run: npm pack --pack-destination ../dist
+        run: |
+          mkdir -p ../dist
+          npm pack --pack-destination ../dist
 
       - uses: actions/upload-artifact@v4
         with:
           name: chiaki-mcp-${{ needs.check-version.outputs.tag }}
-          path: mcp/dist/chiaki-mcp-*.tgz
+          path: mcp/dist/*.tgz
 
   publish-github-packages:
     name: Publish to GitHub Packages
