@@ -11,115 +11,66 @@ on:
   workflow_dispatch:
 
 jobs:
-  # ── Install dependencies (shared cache) ──
-  install:
-    name: Install
+  lint:
+    name: Lint
     runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: mcp
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
           cache: npm
           cache-dependency-path: mcp/package-lock.json
-
       - run: npm ci
-
-      # Persist node_modules for downstream jobs
-      - uses: actions/upload-artifact@v4
-        with:
-          name: node_modules
-          path: mcp/node_modules
-          retention-days: 1
-
-  # ── Lint (ESLint) ──
-  lint:
-    name: Lint
-    needs: install
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: mcp
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "20"
-
-      - uses: actions/download-artifact@v4
-        with:
-          name: node_modules
-          path: mcp/node_modules
-
       - run: npm run lint
 
-  # ── Typecheck (tsc --noEmit) ──
   typecheck:
     name: Typecheck
-    needs: install
     runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: mcp
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
-
-      - uses: actions/download-artifact@v4
-        with:
-          name: node_modules
-          path: mcp/node_modules
-
+          cache: npm
+          cache-dependency-path: mcp/package-lock.json
+      - run: npm ci
       - run: npm run typecheck
 
-  # ── Test (Vitest) ──
   test:
     name: Test
-    needs: install
     runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: mcp
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
-
-      - uses: actions/download-artifact@v4
-        with:
-          name: node_modules
-          path: mcp/node_modules
-
+          cache: npm
+          cache-dependency-path: mcp/package-lock.json
+      - run: npm ci
       - run: npm run test
 
-  # ── Build (tsc) ──
   build:
     name: Build
-    needs: install
     runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: mcp
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
-
-      - uses: actions/download-artifact@v4
-        with:
-          name: node_modules
-          path: mcp/node_modules
-
+          cache: npm
+          cache-dependency-path: mcp/package-lock.json
+      - run: npm ci
       - run: npm run build
