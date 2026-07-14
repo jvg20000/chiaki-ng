@@ -1,6 +1,6 @@
 {
   "name": "@jvg20000/chiaki-mcp",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "MCP server bridging AI models to chiaki-ng PS Remote Play via WebSocket",
   "type": "module",
   "main": "dist/index.js",
