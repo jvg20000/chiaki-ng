@@ -371,6 +371,7 @@ StreamSession::StreamSession(const StreamSessionConnectInfo &connect_info, QObje
 	haptics_output(0),
 	haptics_handheld(0),
 	session_started(false),
+	mcp_server(nullptr),
 #if CHIAKI_GUI_ENABLE_STEAMDECK_NATIVE
 	sdeck(nullptr),
 #endif
@@ -694,6 +695,21 @@ StreamSession::StreamSession(const StreamSessionConnectInfo &connect_info, QObje
 	});
 
 	StartAudioOutDrainThread();
+
+	// ─── MCP server ───────────────────────────────────────────────────────
+	if(connect_info.settings->GetMcpEnabled())
+	{
+		mcp_server = new McpServer(connect_info.settings, this);
+		mcp_server->SetChiakiSession(&session);
+		mcp_server->SetFfmpegDecoder(ffmpeg_decoder);
+		mcp_server->StartServer(
+			static_cast<quint16>(connect_info.settings->GetMcpPort()),
+			connect_info.settings->GetMcpExpose(),
+			connect_info.settings->GetMcpToken());
+	}
+	// Hot reload: reconectar MCP server cuando cambian settings
+	connect(connect_info.settings, &Settings::SettingsChanged,
+		this, &StreamSession::HandleMcpSettingsChanged);
 }
 
 StreamSession::~StreamSession()
@@ -796,6 +812,12 @@ StreamSession::~StreamSession()
 		}
 	}
 #endif
+	if(mcp_server)
+	{
+		mcp_server->StopServer();
+		delete mcp_server;
+		mcp_server = nullptr;
+	}
 }
 
 void StreamSession::Start()
@@ -808,12 +830,16 @@ void StreamSession::Start()
 		throw ChiakiException("Chiaki Session Start failed");
 	}
 	session_started = true;
+	if(mcp_server)
+		mcp_server->SetState(McpState::Connected);
 }
 
 void StreamSession::Stop()
 {
 	mic_active.storeRelaxed(false);
 	chiaki_session_stop(&session);
+	if(mcp_server)
+		mcp_server->SetState(McpState::Idle);
 }
 
 void StreamSession::GoToBed()
@@ -2342,6 +2368,8 @@ void StreamSession::Event(ChiakiEvent *event)
 			connected = false;
 			emit ConnectedChanged();
 			emit SessionQuit(event->quit.reason, event->quit.reason_str ? QString::fromUtf8(event->quit.reason_str) : QString());
+			if(mcp_server)
+				mcp_server->SetState(McpState::Idle);
 			break;
 		case CHIAKI_EVENT_REGIST:
 			emit AutoRegistSucceeded(event->host);
@@ -2557,6 +2585,9 @@ void StreamSession::CantDisplayMessage(bool cant_display)
 {
 	this->cant_display = cant_display;
 	emit CantDisplayChanged(cant_display);
+
+	if(mcp_server && !cant_display)
+		mcp_server->SetState(McpState::Streaming);
 }
 
 #if CHIAKI_GUI_ENABLE_SETSU
@@ -2837,6 +2868,45 @@ static void EventCb(ChiakiEvent *event, void *user)
 {
 	auto session = reinterpret_cast<StreamSession *>(user);
 	StreamSessionPrivate::Event(session, event);
+}
+
+void StreamSession::HandleMcpSettingsChanged()
+{
+	Settings *s = qobject_cast<Settings *>(sender());
+	if(!s)
+		return;
+
+	bool enabled = s->GetMcpEnabled();
+	int port = s->GetMcpPort();
+	bool expose = s->GetMcpExpose();
+	QString token = s->GetMcpToken();
+
+	if(enabled)
+	{
+		if(!mcp_server)
+		{
+			mcp_server = new McpServer(s, this);
+			mcp_server->SetChiakiSession(&session);
+			mcp_server->SetFfmpegDecoder(ffmpeg_decoder);
+			mcp_server->StartServer(
+				static_cast<quint16>(port), expose, token);
+		}
+		else
+		{
+			mcp_server->StopServer();
+			mcp_server->StartServer(
+				static_cast<quint16>(port), expose, token);
+		}
+	}
+	else
+	{
+		if(mcp_server)
+		{
+			mcp_server->StopServer();
+			delete mcp_server;
+			mcp_server = nullptr;
+		}
+	}
 }
 
 #if CHIAKI_GUI_ENABLE_SETSU

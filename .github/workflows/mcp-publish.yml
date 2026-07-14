@@ -1,0 +1,135 @@
+name: MCP Publish
+
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - "mcp/**"
+  workflow_dispatch:
+
+jobs:
+  check-version:
+    name: Check Version
+    runs-on: ubuntu-latest
+    outputs:
+      changed: ${{ steps.version.outputs.changed }}
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+      prerelease: ${{ steps.version.outputs.prerelease }}
+      title: ${{ steps.version.outputs.title }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Set version and tag
+        id: version
+        run: |
+          CURRENT=$(node -p "require('./mcp/package.json').version")
+          PREVIOUS=$(git show HEAD~1:mcp/package.json 2>/dev/null | node -p "JSON.parse(require('fs').readFileSync('/dev/stdin','utf8')).version" 2>/dev/null || echo "none")
+          BRANCH="${GITHUB_REF_NAME}"
+          SHORT_SHA="${GITHUB_SHA::7}"
+
+          if [ "$CURRENT" != "$PREVIOUS" ]; then
+            echo "changed=true" >> $GITHUB_OUTPUT
+            echo "Version changed: ${PREVIOUS} -> ${CURRENT}"
+          else
+            echo "changed=false" >> $GITHUB_OUTPUT
+            echo "Version unchanged (${CURRENT}), skipping publish"
+          fi
+
+          if [ "$BRANCH" = "main" ]; then
+            TAG="mcp-v${CURRENT}"
+            PRERELEASE="false"
+            TITLE="chiaki-mcp v${CURRENT}"
+          else
+            TAG="mcp-v${CURRENT}-dev-${SHORT_SHA}"
+            PRERELEASE="true"
+            TITLE="[DEVELOP] chiaki-mcp v${CURRENT} (${SHORT_SHA})"
+          fi
+
+          echo "current=${CURRENT}" >> $GITHUB_OUTPUT
+          echo "tag=${TAG}" >> $GITHUB_OUTPUT
+          echo "prerelease=${PRERELEASE}" >> $GITHUB_OUTPUT
+          echo "title=${TITLE}" >> $GITHUB_OUTPUT
+
+  build:
+    name: Build
+    needs: check-version
+    if: needs.check-version.outputs.changed == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: mcp
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: mcp/package-lock.json
+
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm run test
+      - run: npm run build
+
+      - name: Package tarball
+        run: npm pack --pack-destination ../dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: chiaki-mcp-${{ needs.check-version.outputs.tag }}
+          path: mcp/dist/chiaki-mcp-*.tgz
+
+  publish-github-packages:
+    name: Publish to GitHub Packages
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      packages: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          registry-url: "https://npm.pkg.github.com"
+      - run: npm ci
+        working-directory: mcp
+      - run: npm run build
+        working-directory: mcp
+      - name: Publish
+        run: |
+          if [ "${{ github.ref_name }}" = "main" ]; then
+            npm publish
+          else
+            npm publish --tag dev
+          fi
+        working-directory: mcp
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  github-release:
+    name: GitHub Release
+    needs: build
+    if: needs.check-version.outputs.changed == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: chiaki-mcp-${{ needs.check-version.outputs.tag }}
+          path: dist
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.check-version.outputs.tag }}
+          name: ${{ needs.check-version.outputs.title }}
+          prerelease: ${{ needs.check-version.outputs.prerelease }}
+          generate_release_notes: true
+          files: dist/*.tgz
