@@ -22,10 +22,12 @@
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { CallToolRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 
 import { ChiakiClient } from "./client.js";
-import { ALL_TOOLS, getToolByName } from "./tools.js";
+import { ALL_TOOLS, getToolByName, validateState } from "./tools.js";
+import type { ToolDef } from "./tools.js";
 import type { ChiakiPush } from "./types.js";
 
 // ── Configuration ──
@@ -71,12 +73,17 @@ const client = new ChiakiClient(CHIAKI_HOST, CHIAKI_PORT, CHIAKI_TOKEN, {
   handshakeTimeout: 5000,
 });
 
+// ── Session state tracking ──
+// Updated via push notifications from chiaki-ng McpServer's state_change events.
+let currentState = "idle";
+
 // ── Event wiring ──
 client.on("connected", () => {
   log("info", "Conectado a chiaki-ng McpServer ✓");
 });
 
 client.on("disconnected", () => {
+  currentState = "idle";
   log("warn", "Desconectado de chiaki-ng");
 });
 
@@ -88,6 +95,11 @@ client.on("reconnecting", ({ attempt, delay }: { attempt: number; delay: number 
 });
 
 client.on("push", (push: ChiakiPush) => {
+  if (push.type === "state_change") {
+    const prevState = currentState;
+    currentState = push.state;
+    log("debug", `Estado: ${prevState} → ${currentState}`);
+  }
   log("debug", "Push notification:", push.type, push);
 });
 
@@ -95,76 +107,138 @@ client.on("error", (err: Error) => {
   log("error", "Error:", err.message);
 });
 
-// ── Register tools ──
+// ── Tool registration ──
+// Phase 1: register tools with the high-level SDK so they appear in listTools.
+// The provided callback is a no-op — our custom handler (Phase 2) intercepts
+// CallToolRequest before the SDK's dispatch runs.
+// We cast schema to `any` to bypass deep type instantiation in the SDK's
+// Zod→JSONSchema conversion. Real validation happens in our handler below.
 for (const toolDef of ALL_TOOLS) {
-  server.tool(
-    toolDef.name,
-    toolDef.description,
-    toolDef.schema.shape,
-    async (params: Record<string, unknown>): Promise<CallToolResult> => {
-      log("debug", `→ ${toolDef.name}`, params);
-
-      try {
-        const response = await toolDef.handler(client, params);
-
-        if (response.error) {
-          log("warn", `← ${toolDef.name} error:`, response.error);
-          return {
-            content: [
-              {
-                type: "text",
-                text: `Error: ${response.error}${response.message ? ` — ${response.message}` : ""}`,
-              },
-            ],
-            isError: true,
-          };
-        }
-
-        // Handle screenshot specially — return as image content
-        if (toolDef.name === "ps_screenshot" && response.screenshot) {
-          log(
-            "debug",
-            `← ${toolDef.name} screenshot (${response.screenshot.length} chars base64)`,
-          );
-          return {
-            content: [
-              {
-                type: "image",
-                data: response.screenshot,
-                mimeType: "image/jpeg",
-              },
-              {
-                type: "text",
-                text: `Screenshot capturado. Resolución: ${response.resolution ?? "desconocida"}`,
-              },
-            ],
-          };
-        }
-
-        // Default text response
-        log("debug", `← ${toolDef.name} ok`, response);
-        return {
-          content: [
-            { type: "text", text: JSON.stringify(response, null, 2) },
-          ],
-        };
-      } catch (err) {
-        log("error", `← ${toolDef.name} exception:`, err);
-        return {
-          content: [
-            {
-              type: "text",
-              text: `Error interno: ${err instanceof Error ? err.message : String(err)}`,
-            },
-          ],
-          isError: true,
-        };
-      }
-    },
-  );
-
-  log("info", `Tool registrada: ${toolDef.name}`);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const schema = toolDef.schema as any;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  server.registerTool(toolDef.name, {
+    description: toolDef.description,
+    inputSchema: schema,
+  }, async (_args: any) => {
+    // No-op: our custom setRequestHandler below intercepts all tool calls.
+    return { content: [{ type: "text" as const, text: "internal dispatcher" }] };
+  });
 }
+log("info", `Registradas ${ALL_TOOLS.length} tools MCP`);
+
+// ── Custom CallToolRequest handler ──
+// Phase 2: replace the SDK's internal CallToolRequest handler with our own
+// that adds Zod validation (preserving .strict(), .default(), etc.),
+// session state checking, screenshot handling, and unified error formatting.
+//
+// The SDK internally sets its handler on the first registerTool() call.
+// We remove it and replace it with our own.
+server.server.removeRequestHandler("tools/call");
+server.server.setRequestHandler(CallToolRequestSchema, async (request): Promise<CallToolResult> => {
+  const { name, arguments: rawArgs } = request.params;
+  const toolDef: ToolDef | undefined = getToolByName(name);
+
+  // ── Unknown tool ──
+  if (!toolDef) {
+    log("warn", `Tool desconocida: ${name}`);
+    return {
+      content: [{ type: "text", text: `Tool desconocida: ${name}` }],
+      isError: true,
+    };
+  }
+
+  log("debug", `→ ${name}`, rawArgs);
+
+  // ── Zod param validation ──
+  const parsed = toolDef.schema.safeParse(rawArgs ?? {});
+  if (!parsed.success) {
+    const issues = parsed.error.issues
+      .map((i) => `  - ${i.path.join(".") || "(root)"}: ${i.message}`)
+      .join("\n");
+    log("warn", `← ${name} params inválidos:`, parsed.error.issues);
+    return {
+      content: [
+        {
+          type: "text",
+          text: `Parámetros inválidos para '${name}':\n${issues}`,
+        },
+      ],
+      isError: true,
+    };
+  }
+
+  // ── State validation ──
+  const stateError = validateState(toolDef.requiresState, currentState);
+  if (stateError) {
+    log("warn", `← ${name} state error:`, stateError);
+    return {
+      content: [{ type: "text", text: `Error: ${stateError}` }],
+      isError: true,
+    };
+  }
+
+  // ── Execute handler ──
+  try {
+    const response = await toolDef.handler(client, parsed.data);
+
+    // Server-side error (not_connected, timeout, etc.)
+    if (response.error) {
+      log("warn", `← ${name} error:`, response.error, response.message);
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Error: ${response.error}${response.message ? ` — ${response.message}` : ""}`,
+          },
+        ],
+        isError: true,
+      };
+    }
+
+    // Handle screenshot specially — return as image content
+    if (name === "ps_screenshot" && response.screenshot) {
+      log(
+        "debug",
+        `← ${name} screenshot (${response.screenshot.length} chars base64)`,
+      );
+      return {
+        content: [
+          {
+            type: "image",
+            data: response.screenshot,
+            mimeType: "image/jpeg",
+          },
+          {
+            type: "text",
+            text: `Screenshot capturado. Resolución: ${response.resolution ?? "desconocida"}`,
+          },
+        ],
+      };
+    }
+
+    // Default text response
+    log("debug", `← ${name} ok`, response);
+    return {
+      content: [
+        { type: "text", text: JSON.stringify(response, null, 2) },
+      ],
+    };
+  } catch (err) {
+    log("error", `← ${name} exception:`, err);
+    return {
+      content: [
+        {
+          type: "text",
+          text: `Error interno: ${err instanceof Error ? err.message : String(err)}`,
+        },
+      ],
+      isError: true,
+    };
+  }
+});
+
+log("info", `Handler CallToolRequest personalizado instalado vía setRequestHandler`);
 
 // ── Start ──
 async function main(): Promise<void> {

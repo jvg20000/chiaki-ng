@@ -26,6 +26,34 @@ export interface ToolDef {
   handler: (client: ChiakiClient, params: Record<string, unknown>) => Promise<ChiakiResponse>;
 }
 
+// ── State requirement type ──
+// "idle"      → only allowed when session is idle (pair, connect)
+// "connected" → allowed when connected OR streaming (press, stick, home, etc.)
+// "streaming" → only allowed when streaming (screenshot)
+export type StateRequirement = "idle" | "connected" | "streaming";
+
+// ── State validation helper ──
+export function validateState(
+  required: StateRequirement | undefined,
+  currentState: string,
+): string | null {
+  if (!required) return null; // no state requirement → always allowed
+
+  if (required === "idle" && currentState !== "idle") {
+    return `Estado actual es '${currentState}', se requiere 'idle'. Desconecta primero con ps_disconnect.`;
+  }
+
+  if (required === "connected" && currentState === "idle") {
+    return "No hay sesión activa (estado 'idle'). Conecta primero con ps_connect.";
+  }
+
+  if (required === "streaming" && currentState !== "streaming") {
+    return `Estado actual es '${currentState}', se requiere 'streaming'. Espera a que el streaming se inicie.`;
+  }
+
+  return null;
+}
+
 // ── Helper: send command with params ──
 async function send(
   client: ChiakiClient,
@@ -76,6 +104,7 @@ const psDisconnect: ToolDef = {
   name: "ps_disconnect",
   description: "Finaliza la sesión actual con la consola PlayStation. El estado vuelve a idle.",
   schema: z.object({}).strict() as ZodObject<any>,
+  requiresState: "connected",
   handler: (client) => send(client, "disconnect"),
 };
 
@@ -92,6 +121,7 @@ const psPress: ToolDef = {
   description:
     "Pulsa uno o varios botones del mando PlayStation simultáneamente. Botones válidos: cross, circle, square, triangle, l1, r1, l2, r2, l3, r3, dpad_up, dpad_down, dpad_left, dpad_right, options, share, ps, touchpad.",
   schema: PsPressParams,
+  requiresState: "connected",
   handler: (client, params) => send(client, "press", params),
 };
 
@@ -100,6 +130,7 @@ const psStick: ToolDef = {
   description:
     "Mueve los joysticks analógicos. Los valores van de -1.0 a 1.0. lx/ly = stick izquierdo, rx/ry = stick derecho.",
   schema: PsStickParams,
+  requiresState: "connected",
   handler: (client, params) => send(client, "stick", params),
 };
 
@@ -108,6 +139,7 @@ const psTrigger: ToolDef = {
   description:
     "Controla los gatillos L2 y R2 del mando PlayStation. Valores de 0 (sin pulsar) a 255 (pulsado a fondo).",
   schema: PsTriggerParams,
+  requiresState: "connected",
   handler: (client, params) => send(client, "trigger", params),
 };
 
@@ -116,6 +148,7 @@ const psTouchpad: ToolDef = {
   description:
     "Toca el panel táctil del mando DualSense/DualShock en las coordenadas especificadas (x: 0-1920, y: 0-1080).",
   schema: PsTouchpadParams,
+  requiresState: "connected",
   handler: (client, params) => send(client, "touchpad", params),
 };
 
@@ -123,6 +156,7 @@ const psHome: ToolDef = {
   name: "ps_home",
   description: "Pulsa el botón PlayStation (PS). Equivale a ir al menú principal de la consola.",
   schema: z.object({}).strict() as ZodObject<any>,
+  requiresState: "connected",
   handler: (client) => send(client, "home"),
 };
 
@@ -130,6 +164,7 @@ const psSleep: ToolDef = {
   name: "ps_sleep",
   description: "Pone la consola PlayStation en modo reposo (sleep). La sesión se cierra.",
   schema: z.object({}).strict() as ZodObject<any>,
+  requiresState: "connected",
   handler: (client) => send(client, "sleep"),
 };
 
@@ -138,6 +173,7 @@ const psKeyboard: ToolDef = {
   description:
     "Escribe texto usando el teclado virtual en la consola. Útil para rellenar campos de texto en juegos o aplicaciones.",
   schema: PsKeyboardParams,
+  requiresState: "connected",
   handler: (client, params) => send(client, "keyboard", { text: params["text"] }),
 };
 
@@ -146,6 +182,7 @@ const psScreenshot: ToolDef = {
   description:
     "Captura una imagen del stream de vídeo actual. Devuelve un JPEG en base64. Requiere streaming activo.",
   schema: PsScreenshotParams,
+  requiresState: "streaming",
   handler: (client) => send(client, "screenshot"),
 };
 
@@ -154,6 +191,7 @@ const psEvents: ToolDef = {
   description:
     "Obtiene los eventos pendientes de la cola: rumble (vibración), LED (cambio de color), etc.",
   schema: z.object({}).strict() as ZodObject<any>,
+  requiresState: "connected",
   handler: (client) => send(client, "events"),
 };
 
