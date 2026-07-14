@@ -12,8 +12,9 @@ jobs:
     name: Check Version
     runs-on: ubuntu-latest
     outputs:
-      changed: ${{ steps.version.outputs.changed }}
+      publish: ${{ steps.version.outputs.publish }}
       version: ${{ steps.version.outputs.version }}
+      npm_version: ${{ steps.version.outputs.npm_version }}
       tag: ${{ steps.version.outputs.tag }}
       prerelease: ${{ steps.version.outputs.prerelease }}
       title: ${{ steps.version.outputs.title }}
@@ -26,29 +27,36 @@ jobs:
         id: version
         run: |
           CURRENT=$(node -p "require('./mcp/package.json').version")
-          PREVIOUS=$(git show HEAD~1:mcp/package.json 2>/dev/null | node -p "JSON.parse(require('fs').readFileSync('/dev/stdin','utf8')).version" 2>/dev/null || echo "none")
           BRANCH="${GITHUB_REF_NAME}"
           SHORT_SHA="${GITHUB_SHA::7}"
 
-          if [ "$CURRENT" != "$PREVIOUS" ]; then
-            echo "changed=true" >> $GITHUB_OUTPUT
-            echo "Version changed: ${PREVIOUS} -> ${CURRENT}"
-          else
-            echo "changed=false" >> $GITHUB_OUTPUT
-            echo "Version unchanged (${CURRENT}), skipping publish"
-          fi
-
           if [ "$BRANCH" = "main" ]; then
+            # Main: solo publicar si version cambió
+            PREVIOUS=$(git show HEAD~1:mcp/package.json 2>/dev/null | node -p "JSON.parse(require('fs').readFileSync('/dev/stdin','utf8')).version" 2>/dev/null || echo "none")
+            if [ "$CURRENT" != "$PREVIOUS" ]; then
+              echo "publish=true" >> $GITHUB_OUTPUT
+              echo "→ Version changed: ${PREVIOUS} → ${CURRENT}"
+            else
+              echo "publish=false" >> $GITHUB_OUTPUT
+              echo "→ Version unchanged (${CURRENT}), skipping"
+            fi
+            NPM_VERSION="${CURRENT}"
             TAG="mcp-v${CURRENT}"
             PRERELEASE="false"
             TITLE="chiaki-mcp v${CURRENT}"
+
           else
+            # Develop: publicar SIEMPRE, version con SHA
+            echo "publish=true" >> $GITHUB_OUTPUT
+            NPM_VERSION="${CURRENT}-dev.${SHORT_SHA}"
             TAG="mcp-v${CURRENT}-dev-${SHORT_SHA}"
             PRERELEASE="true"
             TITLE="[DEVELOP] chiaki-mcp v${CURRENT} (${SHORT_SHA})"
+            echo "→ Dev publish: ${NPM_VERSION}"
           fi
 
-          echo "current=${CURRENT}" >> $GITHUB_OUTPUT
+          echo "version=${CURRENT}" >> $GITHUB_OUTPUT
+          echo "npm_version=${NPM_VERSION}" >> $GITHUB_OUTPUT
           echo "tag=${TAG}" >> $GITHUB_OUTPUT
           echo "prerelease=${PRERELEASE}" >> $GITHUB_OUTPUT
           echo "title=${TITLE}" >> $GITHUB_OUTPUT
@@ -56,7 +64,7 @@ jobs:
   build:
     name: Build
     needs: check-version
-    if: needs.check-version.outputs.changed == 'true'
+    if: needs.check-version.outputs.publish == 'true'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -99,10 +107,18 @@ jobs:
         with:
           node-version: "20"
           registry-url: "https://npm.pkg.github.com"
+
+      - name: Set dev version
+        if: github.ref_name != 'main'
+        run: |
+          npm version ${{ needs.check-version.outputs.npm_version }} --no-git-tag-version
+        working-directory: mcp
+
       - run: npm ci
         working-directory: mcp
       - run: npm run build
         working-directory: mcp
+
       - name: Publish
         run: |
           if [ "${{ github.ref_name }}" = "main" ]; then
@@ -117,7 +133,6 @@ jobs:
   github-release:
     name: GitHub Release
     needs: build
-    if: needs.check-version.outputs.changed == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: write

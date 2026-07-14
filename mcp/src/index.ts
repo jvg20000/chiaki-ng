@@ -1,3 +1,4 @@
+// auto-trigger cd
 #!/usr/bin/env node
 
 /**
