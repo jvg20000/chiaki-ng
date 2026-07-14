@@ -2922,8 +2922,8 @@ void StreamSession::HandleMcpSettingsChanged()
 			mcp_server = nullptr;
 		}
 	}
-#endif
 }
+#endif
 
 #if CHIAKI_GUI_ENABLE_SETSU
 static void SessionSetsuCb(SetsuEvent *event, void *user)
