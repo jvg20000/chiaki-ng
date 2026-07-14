@@ -2516,3 +2516,47 @@ QMap<Qt::Key, int> Settings::GetControllerMappingForDecoding()
 	}
 	return result;
 }
+
+bool Settings::GetMcpEnabled() const
+{
+	return settings.value("settings/mcp_enabled", false).toBool();
+}
+
+void Settings::SetMcpEnabled(bool enabled)
+{
+	settings.setValue("settings/mcp_enabled", enabled);
+	emit SettingsChanged();
+}
+
+int Settings::GetMcpPort() const
+{
+	return settings.value("settings/mcp_port", 9090).toInt();
+}
+
+void Settings::SetMcpPort(int port)
+{
+	settings.setValue("settings/mcp_port", port);
+	emit SettingsChanged();
+}
+
+bool Settings::GetMcpExpose() const
+{
+	return settings.value("settings/mcp_expose", false).toBool();
+}
+
+void Settings::SetMcpExpose(bool expose)
+{
+	settings.setValue("settings/mcp_expose", expose);
+	emit SettingsChanged();
+}
+
+QString Settings::GetMcpToken() const
+{
+	return settings.value("settings/mcp_token", "").toString();
+}
+
+void Settings::SetMcpToken(const QString &token)
+{
+	settings.setValue("settings/mcp_token", token);
+	emit SettingsChanged();
+}
