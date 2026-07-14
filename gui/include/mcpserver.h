@@ -7,8 +7,6 @@
 #include <QWebSocketServer>
 #include <QImage>
 #include <chiaki/ffmpegdecoder.h>
-#include <QImage>
-#include <chiaki/ffmpegdecoder.h>
 #include <QWebSocket>
 #include <QJsonObject>
 #include <QJsonDocument>
@@ -31,8 +29,6 @@ enum class McpState
 	Connected,
 	Streaming
 };
-
-typedef struct chiaki_ffmpeg_decoder_t ChiakiFfmpegDecoder;
 
 typedef struct chiaki_ffmpeg_decoder_t ChiakiFfmpegDecoder;
 
@@ -67,7 +63,6 @@ class McpServer : public QObject
 		QString connected_host_name;
 		QString connected_console;
 		ChiakiConnectVideoProfile connected_video_profile;
-		ChiakiFfmpegDecoder *ffmpeg_decoder;
 		ChiakiFfmpegDecoder *ffmpeg_decoder;
 
 		// Login PIN pending state
@@ -106,13 +101,10 @@ class McpServer : public QObject
 		QJsonObject CmdLoginPin(const QJsonObject &params);
 		QJsonObject CmdStatus();
 		void CmdScreenshot(QWebSocket *client, const QJsonValue &id);
-		void OnSessionEvent(ChiakiEvent *event);
-		QJsonObject CmdEvents()(QWebSocket *client, const QJsonValue &id);
 		QJsonObject CmdPress(const QJsonObject &params);
 		QJsonObject CmdStick(const QJsonObject &params);
 		QJsonObject CmdTrigger(const QJsonObject &params);
 		QJsonObject CmdTouchpad(const QJsonObject &params);
-		QJsonObject CmdScreenshot();
 		QJsonObject CmdHome();
 		QJsonObject CmdSleep();
 		QJsonObject CmdKeyboard(const QJsonObject &params);
@@ -155,6 +147,7 @@ class McpServer : public QObject
 
 		void SetState(McpState new_state);
 		void SetChiakiSession(ChiakiSession *session);
+		void SetFfmpegDecoder(ChiakiFfmpegDecoder *decoder);
 
 	signals:
 		void StateChanged(McpState state);

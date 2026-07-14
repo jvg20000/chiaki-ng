@@ -8,6 +8,7 @@
 #include <chiaki/regist.h>
 #include <chiaki/log.h>
 
+#include <chiaki/ffmpegdecoder.h>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonArray>
@@ -15,6 +16,15 @@
 #include <QMetaObject>
 
 // ─── helpers ────────────────────────────────────────────────────────────────
+
+#include <QImage>
+#include <QBuffer>
+
+extern "C" {
+#include <libswscale/swscale.h>
+#include <libavutil/frame.h>
+}
+
 
 QString McpServer::StateString() const
 {
@@ -287,6 +297,11 @@ void McpServer::SetChiakiSession(ChiakiSession *session)
 }
 
 // ─── WebSocket slots ────────────────────────────────────────────────────────
+void McpServer::SetFfmpegDecoder(ChiakiFfmpegDecoder *decoder)
+{
+	ffmpeg_decoder = decoder;
+}
+
 
 void McpServer::OnNewConnection()
 {
@@ -438,7 +453,10 @@ void McpServer::HandleCommand(QWebSocket *client, const QJsonObject &msg)
 	else if(cmd == QStringLiteral("touchpad"))
 		result = CmdTouchpad(params);
 	else if(cmd == QStringLiteral("screenshot"))
-		result = CmdScreenshot();
+	{
+		CmdScreenshot(client, id);
+		return; // binary + JSON sent internally
+	}
 	else if(cmd == QStringLiteral("home"))
 		result = CmdHome();
 	else if(cmd == QStringLiteral("sleep"))
@@ -1079,22 +1097,113 @@ QJsonObject McpServer::CmdKeyboard(const QJsonObject &params)
 QJsonObject McpServer::CmdEvents()
 {
 	CHECK_CONTROL_STATE;
-	// stub — leería cola de eventos
-	return {};
+
+	QJsonArray events;
+	for(const QJsonObject &ev : event_queue)
+		events.append(ev);
+
+	event_queue.clear();
+
+	QJsonObject r;
+	r[QStringLiteral("events")] = events;
+	r[QStringLiteral("count")] = events.size();
+	return r;
 }
 
 // ── STREAMING only ──────────────────────────────────────────────────────────
 
-QJsonObject McpServer::CmdScreenshot()
+void McpServer::CmdScreenshot(QWebSocket *client, const QJsonValue &id)
 {
 	if(!StateAllowsStream())
-		return {{QStringLiteral("error"), QStringLiteral("no_stream")},
-			{QStringLiteral("message"), QStringLiteral("El stream de vídeo no está activo aún")}};
+	{
+		SendError(client, id,
+			QStringLiteral("no_stream"),
+			QStringLiteral("El stream de vídeo no está activo aún"));
+		return;
+	}
 
-	// stub — capturaría frame del decoder FFMPEG
-	return {};
+	if(!ffmpeg_decoder)
+	{
+		SendError(client, id,
+			QStringLiteral("internal_error"),
+			QStringLiteral("No decoder available"));
+		return;
+	}
+
+	// Pull latest frame from decoder
+	int32_t frames_lost;
+	ChiakiFfmpegFrame frame = chiaki_ffmpeg_decoder_pull_frame(ffmpeg_decoder, &frames_lost);
+	if(!frame.frame)
+	{
+		SendError(client, id,
+			QStringLiteral("no_frame"),
+			QStringLiteral("No frame available from decoder"));
+		return;
+	}
+
+	AVFrame *av = frame.frame;
+	int width = av->width;
+	int height = av->height;
+
+	if(width <= 0 || height <= 0)
+	{
+		av_frame_free(&frame.frame);
+		SendError(client, id,
+			QStringLiteral("invalid_frame"),
+			QStringLiteral("Frame has invalid dimensions"));
+		return;
+	}
+
+	// Convert AVFrame → RGB24 via swscale
+	SwsContext *sws = sws_getContext(
+		width, height, static_cast<AVPixelFormat>(av->format),
+		width, height, AV_PIX_FMT_RGB24,
+		SWS_BILINEAR, nullptr, nullptr, nullptr);
+
+	if(!sws)
+	{
+		av_frame_free(&frame.frame);
+		SendError(client, id,
+			QStringLiteral("encode_error"),
+			QStringLiteral("Failed to create scaler context"));
+		return;
+	}
+
+	QImage img(width, height, QImage::Format_RGB888);
+	uint8_t *dst_data[1] = { img.bits() };
+	int dst_linesize[1] = { static_cast<int>(img.bytesPerLine()) };
+
+	sws_scale(sws, av->data, av->linesize, 0, height, dst_data, dst_linesize);
+	sws_freeContext(sws);
+	av_frame_free(&frame.frame);
+
+	// Encode QImage → JPEG in memory buffer
+	QByteArray jpeg_data;
+	QBuffer buffer(&jpeg_data);
+	buffer.open(QIODevice::WriteOnly);
+	if(!img.save(&buffer, "JPEG", 85))
+	{
+		SendError(client, id,
+			QStringLiteral("encode_error"),
+			QStringLiteral("Failed to encode JPEG"));
+		return;
+	}
+
+	// Send binary JPEG frame first (magic bytes 0xFF 0xD8)
+	client->sendBinaryMessage(jpeg_data);
+
+	// Send JSON metadata response
+	QJsonObject meta;
+	meta[QStringLiteral("ok")] = true;
+	meta[QStringLiteral("width")] = width;
+	meta[QStringLiteral("height")] = height;
+	meta[QStringLiteral("size")] = jpeg_data.size();
+	if(!id.isUndefined())
+		meta[QStringLiteral("id")] = id;
+
+	QJsonDocument doc(meta);
+	client->sendTextMessage(QString::fromUtf8(doc.toJson(QJsonDocument::Compact)));
 }
-
 // ═════════════════════════════════════════════════════════════════════════════
 // Session lifecycle — MCP-initiated connections
 // ═════════════════════════════════════════════════════════════════════════════
@@ -1163,6 +1272,32 @@ void McpServer::OnSessionEvent(ChiakiEvent *event)
 				c->sendTextMessage(payload);
 
 			SetState(McpState::Idle);
+			break;
+		}
+		case CHIAKI_EVENT_RUMBLE:
+		{
+			QJsonObject rumble;
+			rumble[QStringLiteral("type")] = QStringLiteral("rumble");
+			rumble[QStringLiteral("motor")] = QStringLiteral("both");
+			rumble[QStringLiteral("left")] = static_cast<int>(event->rumble.left);
+			rumble[QStringLiteral("right")] = static_cast<int>(event->rumble.right);
+
+			event_queue.append(rumble);
+			while(event_queue.size() > MAX_EVENT_QUEUE)
+				event_queue.removeFirst();
+			break;
+		}
+		case CHIAKI_EVENT_LED_COLOR:
+		{
+			QJsonObject led;
+			led[QStringLiteral("type")] = QStringLiteral("led");
+			led[QStringLiteral("r")] = static_cast<int>(event->led_state[0]);
+			led[QStringLiteral("g")] = static_cast<int>(event->led_state[1]);
+			led[QStringLiteral("b")] = static_cast<int>(event->led_state[2]);
+
+			event_queue.append(led);
+			while(event_queue.size() > MAX_EVENT_QUEUE)
+				event_queue.removeFirst();
 			break;
 		}
 		default:
@@ -1337,203 +1472,4 @@ void McpServer::OnRegistFailed()
 	pending_pair_host.clear();
 	pending_regist_client = nullptr;
 	pending_regist_id = QJsonValue::Undefined;
-void McpServer::CmdScreenshot(QWebSocket *client, const QJsonValue &id)
-{
-	if(!StateAllowsStream())
-	{
-		SendError(client, id,
-			QStringLiteral("no_stream"),
-			QStringLiteral("El stream de vídeo no está activo aún"));
-		return;
-	}
-
-	if(!ffmpeg_decoder)
-	{
-		SendError(client, id,
-			QStringLiteral("internal_error"),
-			QStringLiteral("No decoder available"));
-		return;
-	}
-
-	// Pull latest frame from decoder (may steal one frame from renderer —
-	// acceptable for occasional screenshot requests)
-	int32_t frames_lost;
-	ChiakiFfmpegFrame frame = chiaki_ffmpeg_decoder_pull_frame(ffmpeg_decoder, &frames_lost);
-	if(!frame.frame)
-	{
-		SendError(client, id,
-			QStringLiteral("no_frame"),
-			QStringLiteral("No frame available from decoder"));
-		return;
-	}
-
-	AVFrame *av = frame.frame;
-	int width = av->width;
-	int height = av->height;
-
-	if(width <= 0 || height <= 0)
-	{
-		av_frame_free(&frame.frame);
-		SendError(client, id,
-			QStringLiteral("invalid_frame"),
-			QStringLiteral("Frame has invalid dimensions"));
-		return;
-	}
-
-	// Convert AVFrame → RGB24 via swscale
-	SwsContext *sws = sws_getContext(
-		width, height, static_cast<AVPixelFormat>(av->format),
-		width, height, AV_PIX_FMT_RGB24,
-		SWS_BILINEAR, nullptr, nullptr, nullptr);
-
-	if(!sws)
-	{
-		av_frame_free(&frame.frame);
-		SendError(client, id,
-			QStringLiteral("encode_error"),
-			QStringLiteral("Failed to create scaler context"));
-		return;
-	}
-
-	QImage img(width, height, QImage::Format_RGB888);
-	uint8_t *dst_data[1] = { img.bits() };
-	int dst_linesize[1] = { static_cast<int>(img.bytesPerLine()) };
-
-	sws_scale(sws, av->data, av->linesize, 0, height, dst_data, dst_linesize);
-	sws_freeContext(sws);
-	av_frame_free(&frame.frame);
-
-	// Encode QImage → JPEG in memory buffer
-	QByteArray jpeg_data;
-	QBuffer buffer(&jpeg_data);
-	buffer.open(QIODevice::WriteOnly);
-	if(!img.save(&buffer, "JPEG", 85))
-	{
-		SendError(client, id,
-			QStringLiteral("encode_error"),
-			QStringLiteral("Failed to encode JPEG"));
-		return;
-	}
-
-	// Send binary JPEG frame first (magic bytes 0xFF 0xD8)
-	// The TypeScript client detects this and combines with the JSON response
-	client->sendBinaryMessage(jpeg_data);
-
-	// Send JSON metadata response
-	QJsonObject meta;
-	meta[QStringLiteral("ok")] = true;
-
-
-	QJsonArray events;
-	for(const QJsonObject &ev : event_queue)
-		events.append(ev);
-
-	event_queue.clear();
-
-	QJsonObject r;
-	r[QStringLiteral("events")] = events;
-	r[QStringLiteral("count")] = events.size();
-	return r;
 }
-
-// ── STREAMING only ──────────────────────────────────────────────────────────
-
-QJsonObject McpServer::CmdScreenshot()
-{
-	if(!StateAllowsStream())
-		return {{QStringLiteral("error"), QStringLiteral("no_stream")},
-			{QStringLiteral("message"), QStringLiteral("El stream de vídeo no está activo aún")}};
-
-	// stub — capturaría frame del decoder FFMPEG
-	return {};
-}
-
-// ═════════════════════════════════════════════════════════════════════════════
-// Session lifecycle — MCP-initiated connections
-// ═════════════════════════════════════════════════════════════════════════════
-
-void McpServer::CleanupSession()
-{
-	if(!session_owned || !chiaki_session)
-		return;
-
-	chiaki_session_fini(chiaki_session);
-	delete chiaki_session;
-	chiaki_session = nullptr;
-	session_owned = false;
-	login_pin_pending = false;
-	pending_pin_client = nullptr;
-}
-
-void McpServer::SessionEventCb(ChiakiEvent *event, void *user)
-{
-	auto *self = static_cast<McpServer *>(user);
-	QMetaObject::invokeMethod(self, [self, e = *event]() mutable {
-		self->OnSessionEvent(&e);
-	}, Qt::QueuedConnection);
-}
-
-void McpServer::OnSessionEvent(ChiakiEvent *event)
-{
-	switch(event->type)
-	{
-		case CHIAKI_EVENT_LOGIN_PIN_REQUEST:
-		{
-			login_pin_pending = true;
-			pending_pin_client = active_client;
-
-			QJsonObject notif;
-			notif[QStringLiteral("type")] = QStringLiteral("pin_request");
-			notif[QStringLiteral("message")] = event->login_pin_request.pin_incorrect
-				? QStringLiteral("PIN incorrecto. Intenta de nuevo")
-				: QStringLiteral("PS5/PS4 solicita PIN de acceso");
-
-			QJsonDocument doc(notif);
-			QString payload = QString::fromUtf8(doc.toJson(QJsonDocument::Compact));
-
-			for(auto *c : clients)
-				c->sendTextMessage(payload);
-			break;
-		}
-		case CHIAKI_EVENT_QUIT:
-		{
-			CleanupSession();
-
-			QJsonObject notif;
-			notif[QStringLiteral("type")] = QStringLiteral("quit");
-			notif[QStringLiteral("reason")] = QString::fromUtf8(
-				chiaki_quit_reason_string(event->quit.reason));
-
-			QJsonDocument doc(notif);
-			QString payload = QString::fromUtf8(doc.toJson(QJsonDocument::Compact));
-
-			for(auto *c : clients)
-				c->sendTextMessage(payload);
-
-			SetState(McpState::Idle);
-			break;
-		}
-		case CHIAKI_EVENT_RUMBLE:
-		{
-			QJsonObject rumble;
-			rumble[QStringLiteral("type")] = QStringLiteral("rumble");
-			rumble[QStringLiteral("motor")] = QStringLiteral("both");
-			rumble[QStringLiteral("left")] = static_cast<int>(event->rumble.left);
-			rumble[QStringLiteral("right")] = static_cast<int>(event->rumble.right);
-
-			event_queue.append(rumble);
-			while(event_queue.size() > MAX_EVENT_QUEUE)
-				event_queue.removeFirst();
-			break;
-		}
-		case CHIAKI_EVENT_LED_COLOR:
-		{
-			QJsonObject led;
-			led[QStringLiteral("type")] = QStringLiteral("led");
-			led[QStringLiteral("r")] = static_cast<int>(event->led_state[0]);
-			led[QStringLiteral("g")] = static_cast<int>(event->led_state[1]);
-			led[QStringLiteral("b")] = static_cast<int>(event->led_state[2]);
-
-			event_queue.append(led);
-			while(event_queue.size() > MAX_EVENT_QUEUE)
-				event_queue.removeFirst();
