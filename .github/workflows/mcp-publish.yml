@@ -14,18 +14,22 @@ jobs:
     outputs:
       changed: ${{ steps.version.outputs.changed }}
       version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+      prerelease: ${{ steps.version.outputs.prerelease }}
+      title: ${{ steps.version.outputs.title }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 2
 
-      - name: Check if version changed
+      - name: Set version and tag
         id: version
         run: |
           CURRENT=$(node -p "require('./mcp/package.json').version")
           PREVIOUS=$(git show HEAD~1:mcp/package.json 2>/dev/null | node -p "JSON.parse(require('fs').readFileSync('/dev/stdin','utf8')).version" 2>/dev/null || echo "none")
-          echo "current=${CURRENT}" >> $GITHUB_OUTPUT
-          echo "previous=${PREVIOUS}" >> $GITHUB_OUTPUT
+          BRANCH="${GITHUB_REF_NAME}"
+          SHORT_SHA="${GITHUB_SHA::7}"
+
           if [ "$CURRENT" != "$PREVIOUS" ]; then
             echo "changed=true" >> $GITHUB_OUTPUT
             echo "✅ Version changed: ${PREVIOUS} → ${CURRENT}"
@@ -33,6 +37,23 @@ jobs:
             echo "changed=false" >> $GITHUB_OUTPUT
             echo "⏭️  Version unchanged (${CURRENT}), skipping publish"
           fi
+
+          # Misma convención que release.yml: -dev-{sha} en develop
+          if [ "$BRANCH" = "main" ]; then
+            TAG="mcp-v${CURRENT}"
+            PRERELEASE="false"
+            TITLE="chiaki-mcp v${CURRENT}"
+          else
+            TAG="mcp-v${CURRENT}-dev-${SHORT_SHA}"
+            PRERELEASE="true"
+            TITLE="[DEVELOP] chiaki-mcp v${CURRENT} (${SHORT_SHA})"
+          fi
+
+          echo "current=${CURRENT}" >> $GITHUB_OUTPUT
+          echo "previous=${PREVIOUS}" >> $GITHUB_OUTPUT
+          echo "tag=${TAG}" >> $GITHUB_OUTPUT
+          echo "prerelease=${PRERELEASE}" >> $GITHUB_OUTPUT
+          echo "title=${TITLE}" >> $GITHUB_OUTPUT
 
   build:
     name: Build
@@ -62,7 +83,7 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: chiaki-mcp-${{ needs.check-version.outputs.version }}
+          name: chiaki-mcp-${{ needs.check-version.outputs.tag }}
           path: mcp/dist/chiaki-mcp-*.tgz
 
   publish-npm:
@@ -83,32 +104,36 @@ jobs:
         working-directory: mcp
       - run: npm run build
         working-directory: mcp
-      - name: Publish
-        run: npm publish --access public
+      - name: Publish (main = latest, develop = dev tag)
+        run: |
+          if [ "${{ github.ref_name }}" = "main" ]; then
+            npm publish --access public
+          else
+            npm publish --access public --tag dev
+          fi
         working-directory: mcp
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        continue-on-error: true  # No bloquea si no hay token npm configurado
+        continue-on-error: true
 
   github-release:
     name: GitHub Release
     needs: build
-    if: needs.check-version.outputs.changed == 'true' && github.ref == 'refs/heads/main'
+    if: needs.check-version.outputs.changed == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
       - uses: actions/download-artifact@v4
         with:
-          name: chiaki-mcp-${{ needs.check-version.outputs.version }}
+          name: chiaki-mcp-${{ needs.check-version.outputs.tag }}
           path: dist
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: mcp-v${{ needs.check-version.outputs.version }}
-          name: "chiaki-mcp v${{ needs.check-version.outputs.version }}"
-          body: "Release automática de chiaki-mcp v${{ needs.check-version.outputs.version }}. Generada al hacer merge a main."
+          tag_name: ${{ needs.check-version.outputs.tag }}
+          name: ${{ needs.check-version.outputs.title }}
+          prerelease: ${{ needs.check-version.outputs.prerelease }}
+          generate_release_notes: true
           files: dist/*.tgz
-          draft: false
-          prerelease: ${{ github.ref == 'refs/heads/develop' }}
