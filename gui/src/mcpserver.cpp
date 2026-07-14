@@ -184,6 +184,9 @@ McpServer::McpServer(Settings *settings, QObject *parent)
 	, chiaki_session(nullptr)
 	, controller_state(nullptr)
 	, controller_state_dirty(false)
+	, session_owned(false)
+	, login_pin_pending(false)
+	, pending_pin_client(nullptr)
 	, pending_pair_target(CHIAKI_TARGET_PS5_1)
 	, pending_regist_client(nullptr)
 	, chiaki_regist_ptr(nullptr)
@@ -201,6 +204,7 @@ McpServer::McpServer(Settings *settings, QObject *parent)
 McpServer::~McpServer()
 {
 	StopServer();
+	CleanupSession();
 	CleanupPairState();
 	delete controller_state;
 	controller_state = nullptr;
@@ -418,6 +422,8 @@ void McpServer::HandleCommand(QWebSocket *client, const QJsonObject &msg)
 		result = CmdConnect(params);
 	else if(cmd == QStringLiteral("disconnect"))
 		result = CmdDisconnect();
+	else if(cmd == QStringLiteral("login_pin"))
+		result = CmdLoginPin(params);
 	else if(cmd == QStringLiteral("status"))
 		result = CmdStatus();
 	else if(cmd == QStringLiteral("press"))
@@ -581,10 +587,138 @@ QJsonObject McpServer::CmdConnect(const QJsonObject &params)
 		return {{QStringLiteral("error"), QStringLiteral("already_connected")},
 			{QStringLiteral("message"), QStringLiteral("Ya hay una sesión activa. Usa ps_disconnect() primero")}};
 
-	Q_UNUSED(params);
-	// stub — llamaría a chiaki_session_init() + chiaki_session_start()
+	QString name = params.value(QStringLiteral("name")).toString();
+	if(name.isEmpty())
+		return {{QStringLiteral("error"), QStringLiteral("invalid_params")},
+			{QStringLiteral("message"), QStringLiteral("Missing 'name' parameter")}};
+
+	// ── Buscar host por nombre ───────────────────────────────────────────
+	RegisteredHost rh;
+	bool found = false;
+
+	if(settings->GetNicknameRegisteredHostRegistered(name))
+	{
+		rh = settings->GetNicknameRegisteredHost(name);
+		found = true;
+	}
+	else
+	{
+		QList<RegisteredHost> hosts = settings->GetRegisteredHosts();
+		for(const auto &h : hosts)
+		{
+			if(h.GetServerNickname() == name)
+			{
+				rh = h;
+				found = true;
+				break;
+			}
+		}
+	}
+
+	if(!found)
+		return {{QStringLiteral("error"), QStringLiteral("host_not_found")},
+			{QStringLiteral("message"), QStringLiteral("No se encontró el host '") + name + QStringLiteral("'. Usa ps_list() para ver los hosts registrados")}};
+
+	// ── Obtener dirección IP del manual_host ─────────────────────────────
+	QString host_addr;
+	QList<ManualHost> manuals = settings->GetManualHosts();
+	for(const auto &mh : manuals)
+	{
+		if(mh.GetRegistered() && mh.GetMAC() == rh.GetServerMAC())
+		{
+			host_addr = mh.GetHost();
+			break;
+		}
+	}
+
+	if(host_addr.isEmpty())
+		return {{QStringLiteral("error"), QStringLiteral("no_host_address")},
+			{QStringLiteral("message"), QStringLiteral("No se encontró dirección IP para '") + name + QStringLiteral("'. Añade el host manualmente en la GUI")}};
+
+	// ── Limpiar sesión anterior si existe ────────────────────────────────
+	CleanupSession();
+
+	// ── Construir ChiakiConnectInfo ──────────────────────────────────────
+	ChiakiConnectInfo info = {};
+	info.ps5 = chiaki_target_is_ps5(rh.GetTarget());
+	connect_host_buf = host_addr.toUtf8();
+	info.host = connect_host_buf.constData();
+	info.video_profile_auto_downgrade = true;
+	info.enable_keyboard = false;
+	info.enable_dualsense = false;
+	info.auto_regist = false;
+	info.packet_loss_max = 0.02;
+	info.enable_idr_on_fec_failure = false;
+
+	// Headless mode: disable audio + video for MCP control sessions
+	info.audio_video_disabled = CHIAKI_AUDIO_VIDEO_DISABLED;
+
+	chiaki_connect_video_profile_preset(&info.video_profile,
+		CHIAKI_VIDEO_RESOLUTION_PRESET_720p, CHIAKI_VIDEO_FPS_PRESET_30);
+
+	QByteArray rk = rh.GetRPRegistKey();
+	if(rk.size() != CHIAKI_SESSION_AUTH_SIZE)
+		return {{QStringLiteral("error"), QStringLiteral("invalid_regist_key")},
+			{QStringLiteral("message"), QStringLiteral("Regist key size mismatch")}};
+	memcpy(info.regist_key, rk.constData(), CHIAKI_SESSION_AUTH_SIZE);
+
+	QByteArray morning = rh.GetRPKey();
+	if(morning.size() != sizeof(info.morning))
+		return {{QStringLiteral("error"), QStringLiteral("invalid_morning")},
+			{QStringLiteral("message"), QStringLiteral("Morning key size mismatch")}};
+	memcpy(info.morning, morning.constData(), sizeof(info.morning));
+
+	QByteArray psn_account_b64 = settings->GetPsnAccountId().toUtf8();
+	QByteArray account_id = QByteArray::fromBase64(psn_account_b64);
+	if(account_id.size() == CHIAKI_PSN_ACCOUNT_ID_SIZE)
+		memcpy(info.psn_account_id, account_id.constData(), CHIAKI_PSN_ACCOUNT_ID_SIZE);
+	else
+		memset(info.psn_account_id, 0, sizeof(info.psn_account_id));
+
+	info.holepunch_session = NULL;
+	info.rudp_sock = NULL;
+
+	// ── Crear sesión propia ──────────────────────────────────────────────
+	chiaki_session = new ChiakiSession();
+	chiaki_log_init(&chiaki_log, settings->GetLogLevelMask(), nullptr, nullptr);
+
+	ChiakiErrorCode err = chiaki_session_init(chiaki_session, &info, &chiaki_log);
+	if(err != CHIAKI_ERR_SUCCESS)
+	{
+		delete chiaki_session;
+		chiaki_session = nullptr;
+		return {{QStringLiteral("error"), QStringLiteral("init_failed")},
+			{QStringLiteral("message"), QStringLiteral("Session init failed: ") +
+				QString::fromLocal8Bit(chiaki_error_string(err))}};
+	}
+
+	session_owned = true;
+
+	// ── Registrar callback de eventos ────────────────────────────────────
+	chiaki_session_set_event_cb(chiaki_session, &McpServer::SessionEventCb, this);
+
+	// ── Arrancar sesión ──────────────────────────────────────────────────
+	err = chiaki_session_start(chiaki_session);
+	if(err != CHIAKI_ERR_SUCCESS)
+	{
+		CleanupSession();
+		return {{QStringLiteral("error"), QStringLiteral("start_failed")},
+			{QStringLiteral("message"), QStringLiteral("Session start failed: ") +
+				QString::fromLocal8Bit(chiaki_error_string(err))}};
+	}
+
+	if(!controller_state)
+	{
+		controller_state = new ChiakiControllerState();
+		chiaki_controller_state_set_idle(controller_state);
+	}
+
 	SetState(McpState::Connected);
-	return {{QStringLiteral("state"), StateString()}};
+
+	return {{QStringLiteral("state"), StateString()},
+		{QStringLiteral("host"), name},
+		{QStringLiteral("console"), chiaki_target_is_ps5(rh.GetTarget())
+			? QStringLiteral("PS5") : QStringLiteral("PS4")}};
 }
 
 // ── CONNECTED+ (control) ────────────────────────────────────────────────────
@@ -602,9 +736,46 @@ QJsonObject McpServer::CmdDisconnect()
 		return {{QStringLiteral("error"), QStringLiteral("no_session")},
 			{QStringLiteral("message"), QStringLiteral("No hay sesión activa")}};
 
-	// stub — llamaría a chiaki_session_stop()
+	// Si la sesión es nuestra (MCP-initiated), limpiarla completamente
+	if(session_owned)
+	{
+		chiaki_session_stop(chiaki_session);
+		CleanupSession();
+	}
+	else
+	{
+		// Sesión externa (StreamSession): delegar el stop
+		chiaki_session_stop(chiaki_session);
+	}
+
 	SetState(McpState::Idle);
+
 	return {{QStringLiteral("state"), StateString()}};
+}
+
+QJsonObject McpServer::CmdLoginPin(const QJsonObject &params)
+{
+	// Allow in any state where we have a session
+	if(!chiaki_session)
+		return {{QStringLiteral("error"), QStringLiteral("no_session")},
+			{QStringLiteral("message"), QStringLiteral("No hay sesión activa")}};
+
+	if(!login_pin_pending)
+		return {{QStringLiteral("error"), QStringLiteral("no_pin_pending")},
+			{QStringLiteral("message"), QStringLiteral("No hay PIN pendiente")}};
+
+	QString pin = params.value(QStringLiteral("pin")).toString();
+	if(pin.isEmpty())
+		return {{QStringLiteral("error"), QStringLiteral("invalid_params")},
+			{QStringLiteral("message"), QStringLiteral("Missing 'pin' parameter")}};
+
+	QByteArray pin_data = pin.toUtf8();
+	chiaki_session_set_login_pin(chiaki_session,
+		(const uint8_t *)pin_data.constData(), pin_data.size());
+
+	login_pin_pending = false;
+
+	return {{QStringLiteral("ok"), true}};
 }
 
 QJsonObject McpServer::CmdPress(const QJsonObject &params)
@@ -857,6 +1028,76 @@ QJsonObject McpServer::CmdScreenshot()
 
 	// stub — capturaría frame del decoder FFMPEG
 	return {};
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Session lifecycle — MCP-initiated connections
+// ═════════════════════════════════════════════════════════════════════════════
+
+void McpServer::CleanupSession()
+{
+	if(!session_owned || !chiaki_session)
+		return;
+
+	chiaki_session_fini(chiaki_session);
+	delete chiaki_session;
+	chiaki_session = nullptr;
+	session_owned = false;
+	login_pin_pending = false;
+	pending_pin_client = nullptr;
+}
+
+void McpServer::SessionEventCb(ChiakiEvent *event, void *user)
+{
+	auto *self = static_cast<McpServer *>(user);
+	QMetaObject::invokeMethod(self, [self, e = *event]() mutable {
+		self->OnSessionEvent(&e);
+	}, Qt::QueuedConnection);
+}
+
+void McpServer::OnSessionEvent(ChiakiEvent *event)
+{
+	switch(event->type)
+	{
+		case CHIAKI_EVENT_LOGIN_PIN_REQUEST:
+		{
+			login_pin_pending = true;
+			pending_pin_client = active_client;
+
+			QJsonObject notif;
+			notif[QStringLiteral("type")] = QStringLiteral("pin_request");
+			notif[QStringLiteral("message")] = event->login_pin_request.pin_incorrect
+				? QStringLiteral("PIN incorrecto. Intenta de nuevo")
+				: QStringLiteral("PS5/PS4 solicita PIN de acceso");
+
+			QJsonDocument doc(notif);
+			QString payload = QString::fromUtf8(doc.toJson(QJsonDocument::Compact));
+
+			for(auto *c : clients)
+				c->sendTextMessage(payload);
+			break;
+		}
+		case CHIAKI_EVENT_QUIT:
+		{
+			CleanupSession();
+
+			QJsonObject notif;
+			notif[QStringLiteral("type")] = QStringLiteral("quit");
+			notif[QStringLiteral("reason")] = QString::fromUtf8(
+				chiaki_quit_reason_string(event->quit.reason));
+
+			QJsonDocument doc(notif);
+			QString payload = QString::fromUtf8(doc.toJson(QJsonDocument::Compact));
+
+			for(auto *c : clients)
+				c->sendTextMessage(payload);
+
+			SetState(McpState::Idle);
+			break;
+		}
+		default:
+			break;
+	}
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
