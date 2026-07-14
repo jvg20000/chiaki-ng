@@ -2,7 +2,7 @@ name: Build and Release
 
 on:
   push:
-    branches: [main, develop]
+    tags: ['v*']
 
 jobs:
   # ── Metadata + Create Release ──────────────────────────────────────
@@ -22,21 +22,20 @@ jobs:
       - name: Set release metadata
         id: meta
         run: |
-          VERSION_MAJOR="$(grep 'CHIAKI_VERSION_MAJOR' CMakeLists.txt | grep -Eo '[0-9]+' | head -1)"
-          VERSION_MINOR="$(grep 'CHIAKI_VERSION_MINOR' CMakeLists.txt | grep -Eo '[0-9]+' | head -1)"
-          VERSION_PATCH="$(grep 'CHIAKI_VERSION_PATCH' CMakeLists.txt | grep -Eo '[0-9]+' | head -1)"
-          VERSION="${VERSION_MAJOR}.${VERSION_MINOR}.${VERSION_PATCH}"
-          BRANCH="${GITHUB_REF_NAME}"
+          TAG="${GITHUB_REF_NAME}"
+          # Extraer versión del tag: v1.11.0 → 1.11.0, v1.11.0-dev-abc1234 → 1.11.0
+          VERSION=$(echo "$TAG" | sed -E 's/^v//; s/-dev-.*//; s/-rc.*//; s/-beta.*//; s/-alpha.*//')
           SHORT_SHA="${GITHUB_SHA::7}"
-          if [ "$BRANCH" = "main" ]; then
-            TAG="v${VERSION}-${SHORT_SHA}"
-            PRERELEASE="false"
-            TITLE="Build v${VERSION} (${SHORT_SHA})"
-          else
-            TAG="v${VERSION}-dev-${SHORT_SHA}"
+
+          # Determinar si es pre-release: contiene -dev-, -rc, -beta, -alpha
+          if echo "$TAG" | grep -qE '\-dev\-|\-rc|\-beta|\-alpha'; then
             PRERELEASE="true"
             TITLE="[DEVELOP] Build v${VERSION} (${SHORT_SHA})"
+          else
+            PRERELEASE="false"
+            TITLE="Build v${VERSION} (${SHORT_SHA})"
           fi
+
           echo "tag=${TAG}" >> $GITHUB_OUTPUT
           echo "version=${VERSION}" >> $GITHUB_OUTPUT
           echo "short_sha=${SHORT_SHA}" >> $GITHUB_OUTPUT
