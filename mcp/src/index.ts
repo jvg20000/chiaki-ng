@@ -24,6 +24,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { CallToolRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import type { ZodType } from "zod";
 
 import { ChiakiClient } from "./client.js";
 import { ALL_TOOLS, getToolByName, validateState } from "./tools.js";
@@ -115,7 +116,7 @@ client.on("error", (err: Error) => {
 // We cast schema to `any` to bypass deep type instantiation in the SDK's
 // Zod→JSONSchema conversion. Real validation happens in our handler below.
 for (const toolDef of ALL_TOOLS) {
-  const schema = toolDef.schema as z.ZodType<Record<string, unknown>>;
+  const schema = toolDef.schema as ZodType<Record<string, unknown>>;
   server.registerTool(toolDef.name, {
     description: toolDef.description,
     inputSchema: schema,
