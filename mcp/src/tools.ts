@@ -1,4 +1,4 @@
-import { z, type ZodObject } from "zod";
+import { z, type ZodType } from "zod";
 import type { ChiakiResponse } from "./types.js";
 import {
   PsListParams,
@@ -21,7 +21,7 @@ import type { ChiakiClient } from "./client.js";
 export interface ToolDef {
   name: string;
   description: string;
-  schema: ZodObject<any>;
+  schema: ZodType<Record<string, unknown>>;
   requiresState?: "idle" | "connected" | "streaming";
   handler: (client: ChiakiClient, params: Record<string, unknown>) => Promise<ChiakiResponse>;
 }
@@ -103,7 +103,7 @@ const psConnect: ToolDef = {
 const psDisconnect: ToolDef = {
   name: "ps_disconnect",
   description: "Finaliza la sesión actual con la consola PlayStation. El estado vuelve a idle.",
-  schema: z.object({}).strict() as ZodObject<any>,
+  schema: z.object({}).strict(),
   requiresState: "connected",
   handler: (client) => send(client, "disconnect"),
 };
@@ -112,7 +112,7 @@ const psStatus: ToolDef = {
   name: "ps_status",
   description:
     "Muestra el estado actual: sesión (idle/connected/streaming), host, consola, resolución, FPS, códec, bitrate, pérdida de paquetes, RTT, audio, rumble y micrófono.",
-  schema: z.object({}).strict() as ZodObject<any>,
+  schema: z.object({}).strict(),
   handler: (client) => send(client, "status"),
 };
 
@@ -155,7 +155,7 @@ const psTouchpad: ToolDef = {
 const psHome: ToolDef = {
   name: "ps_home",
   description: "Pulsa el botón PlayStation (PS). Equivale a ir al menú principal de la consola.",
-  schema: z.object({}).strict() as ZodObject<any>,
+  schema: z.object({}).strict(),
   requiresState: "connected",
   handler: (client) => send(client, "home"),
 };
@@ -163,7 +163,7 @@ const psHome: ToolDef = {
 const psSleep: ToolDef = {
   name: "ps_sleep",
   description: "Pone la consola PlayStation en modo reposo (sleep). La sesión se cierra.",
-  schema: z.object({}).strict() as ZodObject<any>,
+  schema: z.object({}).strict(),
   requiresState: "connected",
   handler: (client) => send(client, "sleep"),
 };
@@ -190,7 +190,7 @@ const psEvents: ToolDef = {
   name: "ps_events",
   description:
     "Obtiene los eventos pendientes de la cola: rumble (vibración), LED (cambio de color), etc.",
-  schema: z.object({}).strict() as ZodObject<any>,
+  schema: z.object({}).strict(),
   requiresState: "connected",
   handler: (client) => send(client, "events"),
 };

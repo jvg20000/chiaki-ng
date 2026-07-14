@@ -115,13 +115,11 @@ client.on("error", (err: Error) => {
 // We cast schema to `any` to bypass deep type instantiation in the SDK's
 // Zod→JSONSchema conversion. Real validation happens in our handler below.
 for (const toolDef of ALL_TOOLS) {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const schema = toolDef.schema as any;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const schema = toolDef.schema as z.ZodType<Record<string, unknown>>;
   server.registerTool(toolDef.name, {
     description: toolDef.description,
     inputSchema: schema,
-  }, async (_args: any) => {
+  }, async (_args: Record<string, unknown>) => {
     // No-op: our custom setRequestHandler below intercepts all tool calls.
     return { content: [{ type: "text" as const, text: "internal dispatcher" }] };
   });
