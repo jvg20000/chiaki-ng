@@ -60,8 +60,21 @@ LOG_LEVEL=debug CHIAKI_HOST=127.0.0.1 node dist/index.js
 
 ## Integración con Hermes
 
-Configurar en `config.yaml`:
+Configurar en `config.yaml` (el comando varía según instalación):
 
+**Con npm global:**
+```yaml
+mcp:
+  servers:
+    - name: chiaki-ng
+      type: stdio
+      command: chiaki-mcp
+      env:
+        CHIAKI_HOST: "127.0.0.1"
+        CHIAKI_PORT: "9090"
+```
+
+**Desde el repositorio:**
 ```yaml
 mcp:
   servers:
@@ -75,16 +88,13 @@ mcp:
         CHIAKI_PORT: "9090"
 ```
 
-O para conexión remota:
-
+**Conexión remota (con token):**
 ```yaml
 mcp:
   servers:
     - name: chiaki-ng
       type: stdio
-      command: node
-      args:
-        - /ruta/a/chiaki-ng/mcp/dist/index.js
+      command: chiaki-mcp
       env:
         CHIAKI_HOST: "192.168.1.100"
         CHIAKI_PORT: "9090"
@@ -116,7 +126,21 @@ CHIAKI_HOST=127.0.0.1 CHIAKI_PORT=9090 node dist/index.js
 
 ---
 
-## Build TypeScript
+## Instalación
+
+### Desde npm (recomendado)
+
+```bash
+npm install -g chiaki-mcp
+```
+
+El paquete se publica automáticamente al mergear a `main` (tag `latest`) o `develop` (tag `dev`):
+- **Estable**: `npm install -g chiaki-mcp` (latest, desde main)
+- **Desarrollo**: `npm install -g chiaki-mcp@dev` (desde develop)
+
+También disponible como [GitHub Release](https://github.com/jvg20000/chiaki-ng/releases) con tarball adjunto (tag `mcp-vX.Y.Z`).
+
+### Desde el repositorio (desarrollo)
 
 ```bash
 cd mcp/

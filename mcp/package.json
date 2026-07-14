@@ -4,6 +4,9 @@
   "description": "MCP server bridging AI models to chiaki-ng PS Remote Play via WebSocket",
   "type": "module",
   "main": "dist/index.js",
+  "bin": {
+    "chiaki-mcp": "dist/index.js"
+  },
   "scripts": {
     "build": "tsc",
     "dev": "tsc --watch",
