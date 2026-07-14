@@ -302,6 +302,15 @@ class Settings : public QObject
 		bool GetIDROnFECFailureEnabled() const	   { return settings.value("settings/idr_on_fec_failure", false).toBool(); }
 		void SetIDROnFECFailureEnabled(bool enabled) { settings.setValue("settings/idr_on_fec_failure", enabled); }
 
+		bool GetMcpEnabled() const;
+		void SetMcpEnabled(bool enabled);
+		int GetMcpPort() const;
+		void SetMcpPort(int port);
+		bool GetMcpExpose() const;
+		void SetMcpExpose(bool expose);
+		QString GetMcpToken() const;
+		void SetMcpToken(const QString &token);
+
 		float GetHapticOverride() const 			{ return settings.value("settings/haptic_override", 1.0).toFloat(); }
 		void SetHapticOverride(float override)	{ settings.setValue("settings/haptic_override", override); }
 
@@ -738,6 +747,7 @@ class Settings : public QObject
 		void CurrentProfileChanged();
 		void ProfilesUpdated();
 		void PlaceboSettingsUpdated();
+	void SettingsChanged();
 };
 
 #endif // CHIAKI_SETTINGS_H
