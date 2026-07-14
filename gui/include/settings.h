@@ -481,18 +481,6 @@ class Settings : public QObject
 		uint GetStreamMenuShortcut4() const;
 		void SetStreamMenuShortcut4(uint button);
 
-		bool GetMcpEnabled() const                { return settings.value("settings/mcp_enabled", false).toBool(); }
-		void SetMcpEnabled(bool enabled)          { settings.setValue("settings/mcp_enabled", enabled); }
-
-		int GetMcpPort() const                    { return settings.value("settings/mcp_port", 9090).toInt(); }
-		void SetMcpPort(int port)                 { settings.setValue("settings/mcp_port", port); }
-
-		bool GetMcpExpose() const                 { return settings.value("settings/mcp_expose", false).toBool(); }
-		void SetMcpExpose(bool expose)            { settings.setValue("settings/mcp_expose", expose); }
-
-		QString GetMcpToken() const               { return settings.value("settings/mcp_token", "").toString(); }
-		void SetMcpToken(const QString &token)    { settings.setValue("settings/mcp_token", token); }
-
 		void DeleteProfile(QString profile);
 
 		QString GetPsnAccountId() const;
