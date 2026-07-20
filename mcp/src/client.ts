@@ -26,6 +26,8 @@ export interface ChiakiClientOptions {
   maxRetries?: number;
   /** Handshake timeout in ms (default: 5000). */
   handshakeTimeout?: number;
+  /** Max reconnect attempts before giving up (default: 100, 0 = unlimited). */
+  maxReconnectAttempts?: number;
 }
 
 /**
@@ -36,6 +38,7 @@ export interface ChiakiClientOptions {
  * - `push`              — Push notification from chiaki-ng (state_change, pin_request, quit).
  * - `error`             — Non-fatal error (e.g., send timeout).
  * - `reconnecting`      — About to attempt reconnect. Payload: { attempt: number, delay: number }.
+ * - `reconnect_failed`  — Max reconnect attempts reached. Payload: { attempts: number }.
  */
 export declare interface ChiakiClient {
   on(event: "connected", listener: () => void): this;
@@ -43,11 +46,13 @@ export declare interface ChiakiClient {
   on(event: "push", listener: (push: ChiakiPush) => void): this;
   on(event: "error", listener: (err: Error) => void): this;
   on(event: "reconnecting", listener: (info: { attempt: number; delay: number }) => void): this;
+  on(event: "reconnect_failed", listener: (info: { attempts: number }) => void): this;
   emit(event: "connected"): boolean;
   emit(event: "disconnected"): boolean;
   emit(event: "push", push: ChiakiPush): boolean;
   emit(event: "error", err: Error): boolean;
   emit(event: "reconnecting", info: { attempt: number; delay: number }): boolean;
+  emit(event: "reconnect_failed", info: { attempts: number }): boolean;
 }
 
 export class ChiakiClient extends EventEmitter {
@@ -66,6 +71,7 @@ export class ChiakiClient extends EventEmitter {
   private timeout: number;
   private maxRetries: number;
   private handshakeTimeout: number;
+  private maxReconnectAttempts: number;
 
   // Reconnect state
   private reconnectAttempts = 0;
@@ -96,6 +102,7 @@ export class ChiakiClient extends EventEmitter {
     this.timeout = opts.timeout ?? 10000;
     this.maxRetries = opts.maxRetries ?? 0;
     this.handshakeTimeout = opts.handshakeTimeout ?? 5000;
+    this.maxReconnectAttempts = opts.maxReconnectAttempts ?? 100;
   }
 
   // ── Public API ──
@@ -385,6 +392,13 @@ export class ChiakiClient extends EventEmitter {
     if (wasConnected) {
       this.emit("disconnected");
     }
+    // Bug 2 fix: only schedule reconnect if we disconnected from a
+    // previously-established connection. If we were never connected
+    // (e.g., ECONNREFUSED already triggered onConnectError which
+    // called scheduleReconnect), avoid double-scheduling.
+    if (!wasConnected) {
+      return;
+    }
     this.scheduleReconnect();
   }
 
@@ -392,6 +406,15 @@ export class ChiakiClient extends EventEmitter {
 
   private scheduleReconnect(): void {
     if (this.shuttingDown || !this.reconnect) {
+      return;
+    }
+
+    // Bug 1 fix: clear any pending timer before scheduling a new one
+    this.clearReconnectTimer();
+
+    // Bug 3 fix: respect max attempts limit
+    if (this.reconnectAttempts >= this.maxReconnectAttempts) {
+      this.emit("reconnect_failed", { attempts: this.reconnectAttempts });
       return;
     }
 
