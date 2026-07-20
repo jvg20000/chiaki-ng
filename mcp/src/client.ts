@@ -14,11 +14,11 @@ export type ConnectionState = "disconnected" | "connecting" | "connected";
 export interface ChiakiClientOptions {
   /** Automatically reconnect on disconnect (default: true). */
   reconnect?: boolean;
-  /** Initial reconnect delay in ms (default: 1000). */
+  /** Initial reconnect delay in ms (default: 2000). */
   reconnectDelay?: number;
-  /** Maximum reconnect delay in ms (default: 30000). */
+  /** Maximum reconnect delay in ms (default: 10000). */
   maxReconnectDelay?: number;
-  /** Reconnect backoff multiplier (default: 2). */
+  /** Reconnect backoff multiplier (default: 1). */
   reconnectMultiplier?: number;
   /** Command timeout in ms (default: 10000). */
   timeout?: number;
@@ -26,7 +26,7 @@ export interface ChiakiClientOptions {
   maxRetries?: number;
   /** Handshake timeout in ms (default: 5000). */
   handshakeTimeout?: number;
-  /** Max reconnect attempts before giving up (default: 100, 0 = unlimited). */
+  /** Max reconnect attempts before giving up (default: 5, 0 = unlimited). */
   maxReconnectAttempts?: number;
 }
 
@@ -96,13 +96,13 @@ export class ChiakiClient extends EventEmitter {
     this.token = token;
 
     this.reconnect = opts.reconnect ?? true;
-    this.reconnectDelay = opts.reconnectDelay ?? 1000;
-    this.maxReconnectDelay = opts.maxReconnectDelay ?? 30000;
-    this.reconnectMultiplier = opts.reconnectMultiplier ?? 2;
+    this.reconnectDelay = opts.reconnectDelay ?? 2000;
+    this.maxReconnectDelay = opts.maxReconnectDelay ?? 10000;
+    this.reconnectMultiplier = opts.reconnectMultiplier ?? 1;
     this.timeout = opts.timeout ?? 10000;
     this.maxRetries = opts.maxRetries ?? 0;
     this.handshakeTimeout = opts.handshakeTimeout ?? 5000;
-    this.maxReconnectAttempts = opts.maxReconnectAttempts ?? 100;
+    this.maxReconnectAttempts = opts.maxReconnectAttempts ?? 5;
   }
 
   // ── Public API ──
