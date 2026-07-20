@@ -5,7 +5,7 @@ on:
     paths:
       - "mcp/**"
   push:
-    branches: [main, develop]
+    tags: ['mcp-v*']
     paths:
       - "mcp/**"
   workflow_dispatch:
